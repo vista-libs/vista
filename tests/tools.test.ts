@@ -1,0 +1,141 @@
+import { describe, it, expect } from "vitest"
+import { generateTools } from "../src/tools/generator"
+import { SchemaMap } from "../src/types"
+
+const schema: SchemaMap = {
+  resources: {
+    orders: {
+      name: "orders",
+      tableName: "Order",
+      description: "Customer purchase orders",
+      fields: {
+        id:     { name: "id",     type: "uuid",   isNullable: false, isId: true },
+        status: {
+          name: "status",
+          type: "enum",
+          isNullable: false,
+          isId: false,
+          enumValues: ["pending", "shipped", "delivered"],
+          description: "Current order status",
+        },
+        amount:    { name: "amount",    type: "number", isNullable: false, isId: false },
+        secret_key:{ name: "secret_key",type: "string", isNullable: true,  isId: false, sensitive: true },
+        notes:     { name: "notes",     type: "string", isNullable: true,  isId: false },
+      },
+      relations: {
+        items:    { name: "items",    targetResource: "items",    type: "hasMany",   foreignKey: "order_id" },
+        customer: { name: "customer", targetResource: "customers",type: "belongsTo", foreignKey: "customer_id" },
+      },
+    },
+  },
+}
+
+describe("generateTools", () => {
+  it("read: false → no tools generated", () => {
+    const tools = generateTools(schema, {
+      orders: () => ({ read: false }),
+    }, {}, "deny-all")
+    expect(tools).toHaveLength(0)
+  })
+
+  it("read allowed + no write → only query/get tools", () => {
+    const tools = generateTools(schema, {
+      orders: () => ({ read: true, write: false }),
+    }, {}, "deny-all")
+    const names = tools.map(t => t.name)
+    expect(names).toContain("query_orders")
+    expect(names).toContain("get_orders")
+    expect(names).not.toContain("create_orders")
+    expect(names).not.toContain("update_orders")
+    expect(names).not.toContain("delete_orders")
+  })
+
+  it("write allowed → create and update tools present", () => {
+    const tools = generateTools(schema, {
+      orders: () => ({ read: true, write: true }),
+    }, {}, "deny-all")
+    const names = tools.map(t => t.name)
+    expect(names).toContain("create_orders")
+    expect(names).toContain("update_orders")
+  })
+
+  it("delete allowed → delete tool present", () => {
+    const tools = generateTools(schema, {
+      orders: () => ({ read: true, delete: true }),
+    }, {}, "deny-all")
+    const names = tools.map(t => t.name)
+    expect(names).toContain("delete_orders")
+  })
+
+  it("enum fields use correct values in schema", () => {
+    const tools = generateTools(schema, {
+      orders: () => ({ read: true }),
+    }, {}, "deny-all")
+    const queryTool = tools.find(t => t.name === "query_orders")!
+    const schema_ = queryTool.input_schema as Record<string, unknown>
+    const filters = schema_.properties as Record<string, unknown>
+    const statusFilter = (filters.filters as Record<string, unknown>)
+    const statusProps = (statusFilter.properties as Record<string, unknown>)
+    const statusSchema = statusProps.status as Record<string, unknown>
+    // It's oneOf for enum
+    const oneOf = statusSchema.oneOf as Array<Record<string, unknown>>
+    const enumDef = oneOf.find((s: Record<string, unknown>) => s.enum !== undefined)
+    expect(enumDef?.enum).toEqual(["pending", "shipped", "delivered"])
+  })
+
+  it("sensitive fields absent from tool input schema", () => {
+    const tools = generateTools(schema, {
+      orders: () => ({ read: true, write: true }),
+    }, {}, "deny-all")
+    const queryTool = tools.find(t => t.name === "query_orders")!
+    const schema_ = queryTool.input_schema as Record<string, unknown>
+    const filters = schema_.properties as Record<string, unknown>
+    const filterSchema = filters.filters as Record<string, unknown>
+    const filterProps = filterSchema.properties as Record<string, unknown>
+    expect(filterProps).not.toHaveProperty("secret_key")
+
+    const createTool = tools.find(t => t.name === "create_orders")!
+    const createSchema = createTool.input_schema as Record<string, unknown>
+    const createProps = createSchema.properties as Record<string, unknown>
+    expect(createProps).not.toHaveProperty("secret_key")
+  })
+
+  it("description annotation appears in tool description", () => {
+    const tools = generateTools(schema, {
+      orders: () => ({ read: true }),
+    }, {}, "deny-all")
+    const queryTool = tools.find(t => t.name === "query_orders")!
+    expect(queryTool.description).toContain("Customer purchase orders")
+  })
+
+  it("denied relation not in include enum", () => {
+    const tools = generateTools(schema, {
+      orders: () => ({ read: true, relations: { customer: false, items: true } }),
+    }, {}, "deny-all")
+    const queryTool = tools.find(t => t.name === "query_orders")!
+    const schema_ = queryTool.input_schema as Record<string, unknown>
+    const props = schema_.properties as Record<string, unknown>
+    const includeSchema = props.include as Record<string, unknown>
+    const items = includeSchema.items as Record<string, unknown>
+    expect(items.enum).not.toContain("customer")
+    expect(items.enum).toContain("items")
+  })
+
+  it("options.resources limits generated tools", () => {
+    const tools = generateTools(
+      schema,
+      { orders: () => ({ read: true }) },
+      {},
+      "deny-all",
+      { resources: [] }
+    )
+    expect(tools).toHaveLength(0)
+  })
+
+  it("allow-all default policy generates tools without explicit policy", () => {
+    const tools = generateTools(schema, {}, {}, "allow-all")
+    const names = tools.map(t => t.name)
+    expect(names).toContain("query_orders")
+    expect(names).toContain("get_orders")
+  })
+})
