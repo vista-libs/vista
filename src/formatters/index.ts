@@ -34,16 +34,6 @@ export interface GeminiTool {
   parameters: object
 }
 
-/**
- * Vercel AI SDK tool body. Spread into `tool({ ...def, parameters:
- * jsonSchema(def.parameters), execute })` — kept dependency-free so ormai does
- * not pull in the `ai` package.
- */
-export interface VercelTool {
-  description: string
-  parameters: object
-}
-
 export const anthropic: ToolFormatter<AnthropicTool> = (t) => ({
   name: t.name,
   description: t.description,
@@ -61,11 +51,6 @@ export const openai: ToolFormatter<OpenAITool> = (t) => ({
 
 export const gemini: ToolFormatter<GeminiTool> = (t) => ({
   name: t.name,
-  description: t.description,
-  parameters: t.parameters,
-})
-
-export const vercel: ToolFormatter<VercelTool> = (t) => ({
   description: t.description,
   parameters: t.parameters,
 })

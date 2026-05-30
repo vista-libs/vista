@@ -1,6 +1,6 @@
 import "dotenv/config"
 import { createOpenRouter } from "@openrouter/ai-sdk-provider"
-import { generateText, jsonSchema, tool } from "ai"
+import { generateText } from "ai"
 import { PrismaClient } from "@prisma/client"
 import { ORMAI, PrismaAdapter } from "ormai"
 import type { DefaultContext, InferResources } from "ormai"
@@ -103,25 +103,13 @@ async function run(
   console.log(`Prompt: "${prompt}"`)
   console.log("=".repeat(64))
 
-  const ormaiTools = await ormai.tools.vercel(ctx)
-  const availableTools = ormaiTools.map(t => t.name)
+  // ormai.tools.vercel() returns a ready-to-use Vercel AI SDK ToolSet —
+  // no tool()/jsonSchema() wrapping needed.
+  const aiTools = await ormai.tools.vercel(ctx)
+  const availableTools = Object.keys(aiTools)
   console.log(`\nTools available (${availableTools.length}): ${availableTools.join(", ")}`)
 
   const calls: RecordedCall[] = []
-
-  const aiTools = Object.fromEntries(
-    ormaiTools.map(t => [
-      t.name,
-      tool({
-        description: t.definition.description,
-        parameters: jsonSchema(t.definition.parameters as Parameters<typeof jsonSchema>[0]),
-        execute: async (args) => {
-          try { return await t.execute(args) }
-          catch (err) { return { error: (err as Error).message } }
-        },
-      }),
-    ])
-  )
 
   const { text } = await generateText({
     model: openrouter("openrouter/owl-alpha"),

@@ -22,7 +22,6 @@ export type {
   AnthropicTool,
   OpenAITool,
   GeminiTool,
-  VercelTool,
 } from "./formatters"
 export type { NeutralTool } from "./tools/generator"
 export type {

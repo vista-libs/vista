@@ -103,14 +103,23 @@ export class ORMAI<TContext = DefaultContext, TResources extends string = string
   }
 
   /**
-   * Provider-formatted tools. Each method returns `{ definition, name, execute }`
-   * where `definition` is the shape that provider's API expects. Use `format()`
-   * with a custom {@link ToolFormatter} for any provider not built in.
+   * Provider-formatted tools.
+   *
+   * `anthropic` / `openai` / `gemini` / `format` return `{ definition, name,
+   * execute }[]` — `definition` is the provider's tool shape, `name`/`execute`
+   * are kept alongside for dispatching tool calls.
+   *
+   * `vercel` is different: it returns a ready-to-use Vercel AI SDK `ToolSet`
+   * (a record keyed by tool name, each value built with `tool()` + `jsonSchema()`
+   * and `execute` already wired) so it drops straight into `generateText`.
    *
    * ```ts
    * const tools = await ormai.tools.openai(ctx)
    * // tools.map(t => t.definition) → pass to the API
    * // on a tool call: tools.find(t => t.name === call.name)!.execute(args)
+   *
+   * const tools = await ormai.tools.vercel(ctx)
+   * await generateText({ model, tools, prompt })   // no wrapping needed
    * ```
    */
   get tools() {
@@ -122,10 +131,48 @@ export class ORMAI<TContext = DefaultContext, TResources extends string = string
       gemini: (ctx: TContext, options?: GetToolsOptions<TResources>) =>
         this.formatTools(ctx, formats.gemini, options),
       vercel: (ctx: TContext, options?: GetToolsOptions<TResources>) =>
-        this.formatTools(ctx, formats.vercel, options),
+        this.vercelTools(ctx, options),
       format: <T>(ctx: TContext, formatter: ToolFormatter<T>, options?: GetToolsOptions<TResources>) =>
         this.formatTools(ctx, formatter, options),
     }
+  }
+
+  /**
+   * Build a Vercel AI SDK `ToolSet` — `{ [name]: tool({ description, parameters,
+   * execute }) }` — ready to pass as `tools` to `generateText`/`streamText`.
+   * Requires the optional peer dependency `ai`. Tool errors are caught and
+   * returned as `{ error }` so the agent can recover instead of aborting.
+   */
+  private async vercelTools(
+    ctx: TContext,
+    options?: GetToolsOptions<TResources>
+  ): Promise<Record<string, unknown>> {
+    let ai: { tool: (def: unknown) => unknown; jsonSchema: (schema: object) => unknown }
+    try {
+      const specifier = "ai"
+      ai = await import(specifier)
+    } catch {
+      throw new Error(
+        '[ormai] tools.vercel() requires the "ai" package (Vercel AI SDK). Install it with: npm install ai'
+      )
+    }
+
+    const neutral = await this.neutralTools(ctx, options)
+    const tools: Record<string, unknown> = {}
+    for (const t of neutral) {
+      tools[t.name] = ai.tool({
+        description: t.description,
+        parameters: ai.jsonSchema(t.parameters),
+        execute: async (args: unknown) => {
+          try {
+            return serializeResult(await this.executeTool(t.name, args, ctx))
+          } catch (err) {
+            return { error: (err as Error).message }
+          }
+        },
+      })
+    }
+    return tools
   }
 
   /** Generate provider-neutral tool definitions shaped by the evaluated policy. */

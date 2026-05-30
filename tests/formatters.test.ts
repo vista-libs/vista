@@ -1,5 +1,5 @@
 import { describe, it, expect } from "vitest"
-import { anthropic, openai, gemini, vercel } from "../src/formatters"
+import { anthropic, openai, gemini } from "../src/formatters"
 import { NeutralTool } from "../src/tools/generator"
 
 const tool: NeutralTool = {
@@ -31,13 +31,6 @@ describe("formatters", () => {
   it("gemini is a flat function declaration", () => {
     expect(gemini(tool)).toEqual({
       name: "query_orders",
-      description: "Query orders",
-      parameters: tool.parameters,
-    })
-  })
-
-  it("vercel exposes description + parameters only", () => {
-    expect(vercel(tool)).toEqual({
       description: "Query orders",
       parameters: tool.parameters,
     })

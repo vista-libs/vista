@@ -55,16 +55,18 @@ describe("ormai.tools namespace", () => {
     expect(query.definition.name).toBe("query_order")
   })
 
-  it("gemini and vercel produce their respective shapes", async () => {
+  it("gemini produces flat function declarations", async () => {
     const ormai = makeOrmai(new MockAdapter())
     const gemini = await ormai.tools.gemini({})
-    expect(gemini.find(t => t.name === "query_order")!.definition).toHaveProperty("parameters")
+    const g = gemini.find(t => t.name === "query_order")!.definition
+    expect(g.name).toBe("query_order")
+    expect(g).toHaveProperty("parameters")
+  })
 
-    const vercel = await ormai.tools.vercel({})
-    const v = vercel.find(t => t.name === "query_order")!.definition
-    expect(v).toHaveProperty("description")
-    expect(v).toHaveProperty("parameters")
-    expect(v).not.toHaveProperty("name")
+  it("vercel throws a helpful error when the 'ai' package is missing", async () => {
+    // `ai` is an optional peer dependency and is not installed in this repo.
+    const ormai = makeOrmai(new MockAdapter())
+    await expect(ormai.tools.vercel({})).rejects.toThrow(/requires the "ai" package/)
   })
 
   it("execute() runs the policy-enforced query via the adapter", async () => {

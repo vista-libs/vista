@@ -127,13 +127,15 @@ new ORMAI({
 
 ## Tool formats / providers
 
-`ormai.tools.<provider>(ctx)` returns the tools formatted for that provider. Each entry is `{ definition, name, execute }`:
+`ormai.tools.<provider>(ctx)` returns the tools formatted for that provider. Built-in providers: `anthropic`, `openai`, `gemini`, `vercel`.
+
+For `anthropic`, `openai`, and `gemini` you get an array of `{ definition, name, execute }`:
 
 - `definition` — the clean, provider-specific shape to hand to the model API
 - `name` — the tool name, for matching a tool call back to its handler
 - `execute(args)` — runs the call with policy enforced and results serialized (`Decimal` → number, `Date` → ISO string, `BigInt` → string)
 
-Built-in providers: `anthropic`, `openai`, `gemini`, `vercel`.
+`vercel` is the exception — it returns a ready-to-use Vercel AI SDK `ToolSet` (see below).
 
 **OpenAI:**
 ```ts
@@ -169,25 +171,18 @@ const result = await tools.find(t => t.name === block.name)?.execute(block.input
 
 **Google Gemini:** `t.definition` is a function declaration — wrap the list in `{ functionDeclarations: [...] }`.
 
-**Vercel AI SDK:** `t.definition` is `{ description, parameters }`; wrap `parameters` with `jsonSchema()` and attach `execute`:
+**Vercel AI SDK:** `ormai.tools.vercel(ctx)` is special — it returns a ready-to-use `ToolSet` (a record keyed by tool name, each entry already built with `tool()` + `jsonSchema()` and `execute` wired). Drop it straight into `generateText`:
 ```ts
-import { tool, jsonSchema } from "ai"
+const tools = await ormai.tools.vercel(ctx)
 
-const ormaiTools = await ormai.tools.vercel(ctx)
-const tools = Object.fromEntries(
-  ormaiTools.map(t => [
-    t.name,
-    tool({
-      description: t.definition.description,
-      parameters: jsonSchema(t.definition.parameters),
-      execute: async (args) => {
-        try { return await t.execute(args) }
-        catch (err) { return { error: err.message } }
-      },
-    }),
-  ])
-)
+const { text } = await generateText({
+  model,
+  tools,        // no tool()/jsonSchema() wrapping needed
+  maxSteps: 5,
+  prompt,
+})
 ```
+Tool errors are caught and returned as `{ error }` so the agent can recover. Requires the optional peer dependency `ai` (`npm install ai`).
 
 **Any other provider** — pass a formatter to `ormai.tools.format(ctx, fn)`:
 ```ts

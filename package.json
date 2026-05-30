@@ -13,7 +13,13 @@
     "@prisma/internals": "^5.0.0"
   },
   "peerDependencies": {
-    "@prisma/client": "^5.0.0"
+    "@prisma/client": "^5.0.0",
+    "ai": "^3.0.0 || ^4.0.0"
+  },
+  "peerDependenciesMeta": {
+    "ai": {
+      "optional": true
+    }
   },
   "devDependencies": {
     "@types/node": "^20.0.0",
