@@ -2,7 +2,9 @@
 
 Give an LLM agent access to your database. Control exactly what it can see and do.
 
-ormai sits between your agent and Prisma. It reads your schema, you write access policies, it generates the tools. The LLM never touches SQL — it only calls what you've explicitly allowed, filtered down to what the current user is permitted to see.
+ormai sits between your agent and your ORM. It reads your schema, you write access policies, it generates the tools. The LLM never touches SQL — it only calls what you've explicitly allowed, filtered down to what the current user is permitted to see.
+
+It's **ORM-agnostic** (Prisma is the built-in adapter today; the adapter contract is small enough to wrap any ORM — see [Other ORMs](#other-orms)) and **provider-agnostic** — the same tools come out shaped for Anthropic, OpenAI, Google Gemini, or the Vercel AI SDK (see [Tool formats](#tool-formats--providers)).
 
 ```ts
 const ormai = new ORMAI<DefaultContext, InferResources<typeof prisma>>({
@@ -33,8 +35,8 @@ const tools = await ormai.executableTools(ctx)
 
 1. **Introspection** — on first call, ormai parses your `schema.prisma` using `@prisma/internals`. No DB connection needed.
 2. **Policy evaluation** — for the current request context, it evaluates each resource policy and determines which operations, fields, and relations are accessible.
-3. **Tool generation** — it generates JSON Schema tool definitions (Anthropic-compatible) shaped by the evaluated policy. A resource with `read: false` produces no tools at all.
-4. **Execution** — when the LLM calls a tool, ormai validates the input, re-evaluates policy, builds an IR with policy filters already merged, and executes via Prisma. The LLM cannot produce a query that escapes the policy filters.
+3. **Tool generation** — it generates provider-neutral JSON Schema tool definitions shaped by the evaluated policy, then formats them for your LLM provider (Anthropic, OpenAI, Gemini, Vercel AI SDK, or a custom formatter). A resource with `read: false` produces no tools at all.
+4. **Execution** — when the LLM calls a tool, ormai validates the input, re-evaluates policy, builds an IR with policy filters already merged, and executes via the adapter. The LLM cannot produce a query that escapes the policy filters.
 
 ---
 
@@ -123,21 +125,61 @@ new ORMAI({
 
 ---
 
-## Connecting to an LLM framework
+## Tool formats / providers
 
-`executableTools()` returns tools with `execute()` attached. Results are automatically serialized (Prisma `Decimal` → number, `Date` → ISO string, `BigInt` → string).
+`ormai.tools.<provider>(ctx)` returns the tools formatted for that provider. Each entry is `{ definition, name, execute }`:
 
-**Vercel AI SDK:**
+- `definition` — the clean, provider-specific shape to hand to the model API
+- `name` — the tool name, for matching a tool call back to its handler
+- `execute(args)` — runs the call with policy enforced and results serialized (`Decimal` → number, `Date` → ISO string, `BigInt` → string)
+
+Built-in providers: `anthropic`, `openai`, `gemini`, `vercel`.
+
+**OpenAI:**
+```ts
+const tools = await ormai.tools.openai(ctx)
+
+const res = await openai.chat.completions.create({
+  model: "gpt-4o",
+  messages,
+  tools: tools.map(t => t.definition),   // { type: "function", function: {...} }
+})
+
+// on a tool call:
+for (const call of res.choices[0].message.tool_calls ?? []) {
+  const handler = tools.find(t => t.name === call.function.name)
+  const result = await handler?.execute(JSON.parse(call.function.arguments))
+}
+```
+
+**Anthropic:**
+```ts
+const tools = await ormai.tools.anthropic(ctx)
+
+const res = await anthropic.messages.create({
+  model: "claude-opus-4-8",
+  max_tokens: 1024,
+  messages,
+  tools: tools.map(t => t.definition),   // { name, description, input_schema }
+})
+
+// on a tool_use block:
+const result = await tools.find(t => t.name === block.name)?.execute(block.input)
+```
+
+**Google Gemini:** `t.definition` is a function declaration — wrap the list in `{ functionDeclarations: [...] }`.
+
+**Vercel AI SDK:** `t.definition` is `{ description, parameters }`; wrap `parameters` with `jsonSchema()` and attach `execute`:
 ```ts
 import { tool, jsonSchema } from "ai"
 
-const execTools = await ormai.executableTools(ctx)
+const ormaiTools = await ormai.tools.vercel(ctx)
 const tools = Object.fromEntries(
-  execTools.map(t => [
+  ormaiTools.map(t => [
     t.name,
     tool({
-      description: t.description,
-      parameters: jsonSchema(t.input_schema),
+      description: t.definition.description,
+      parameters: jsonSchema(t.definition.parameters),
       execute: async (args) => {
         try { return await t.execute(args) }
         catch (err) { return { error: err.message } }
@@ -147,18 +189,16 @@ const tools = Object.fromEntries(
 )
 ```
 
-**Anthropic SDK:**
+**Any other provider** — pass a formatter to `ormai.tools.format(ctx, fn)`:
 ```ts
-const execTools = await ormai.executableTools(ctx)
-
-// Pass to messages.create:
-const anthropicTools = execTools.map(({ name, description, input_schema }) => ({
-  name, description, input_schema,
+const tools = await ormai.tools.format(ctx, (t) => ({
+  name: t.name,
+  description: t.description,
+  schema: t.parameters,   // t is a NeutralTool { name, description, parameters }
 }))
-
-// On tool_use response:
-const result = await execTools.find(t => t.name === toolUse.name)?.execute(toolUse.input)
 ```
+
+> The original flat helpers are still available: `ormai.getTools(ctx)` (Anthropic `input_schema` shape) and `ormai.executableTools(ctx)` (the same, with `execute()` attached).
 
 ---
 
@@ -234,6 +274,28 @@ const info = await ormai.describe()
 - `write: { tenant_id }` forces the value into created/updated data — the LLM can't write to a different tenant even if it tries
 - `belongsTo` includes enforce the related resource's row filter post-fetch
 - Sensitive fields are stripped at introspection time, before policy evaluation
+
+---
+
+## Other ORMs
+
+Prisma is the only built-in adapter today, but ormai is not tied to it. Everything above the adapter — policies, tool generation, the query IR, serialization — is ORM-agnostic. An adapter is just two methods:
+
+```ts
+import type { ORMAIAdapter, SchemaMap, ResolvedQuery } from "ormai"
+
+class MyOrmAdapter implements ORMAIAdapter {
+  // Describe your schema as resources, fields, and relations.
+  async introspect(): Promise<SchemaMap> { /* ... */ }
+
+  // Run a resolved, policy-checked query. Filters are already merged in.
+  async execute(query: ResolvedQuery): Promise<unknown> { /* ... */ }
+}
+
+const ormai = new ORMAI({ adapter: new MyOrmAdapter() })
+```
+
+`SchemaMap`, `ResolvedQuery`, and `FilterNode` are all exported so an adapter can map ormai's neutral query into its own ORM's calls. The `PrismaAdapter` in [`src/adapters/prisma.ts`](src/adapters/prisma.ts) is a reference implementation.
 
 ---
 
