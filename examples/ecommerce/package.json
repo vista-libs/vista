@@ -1,0 +1,30 @@
+{
+  "name": "ormai-ecommerce-example",
+  "version": "0.0.1",
+  "private": true,
+  "description": "End-to-end e-commerce example for ormai",
+  "scripts": {
+    "start": "tsx index.ts",
+    "db:start": "docker run -d --name ormai-postgres -p 5432:5432 -e POSTGRES_USER=postgres -e POSTGRES_PASSWORD=postgres -e POSTGRES_DB=ormai_dev postgres:16-alpine || docker start ormai-postgres",
+    "db:stop": "docker stop ormai-postgres",
+    "db:reset": "docker stop ormai-postgres && docker rm ormai-postgres && npm run db:start",
+    "db:migrate": "prisma migrate dev",
+    "db:seed": "tsx prisma/seed.ts",
+    "db:push": "prisma db push",
+    "db:studio": "prisma studio",
+    "db:generate": "prisma generate"
+  },
+  "dependencies": {
+    "@openrouter/ai-sdk-provider": "^0.4.0",
+    "@prisma/client": "^5.0.0",
+    "ai": "^4.0.0",
+    "dotenv": "^16.0.0",
+    "ormai": "file:../.."
+  },
+  "devDependencies": {
+    "@types/node": "^20.0.0",
+    "prisma": "^5.0.0",
+    "tsx": "^4.0.0",
+    "typescript": "^5.0.0"
+  }
+}

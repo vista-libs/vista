@@ -1,0 +1,82 @@
+generator client {
+  provider = "prisma-client-js"
+}
+
+datasource db {
+  provider = "postgresql"
+  url      = env("DATABASE_URL")
+}
+
+enum UserRole {
+  admin
+  support
+  customer
+}
+
+enum OrderStatus {
+  pending
+  processing
+  shipped
+  delivered
+  cancelled
+}
+
+/// @ormai:description "A user account in the system"
+model User {
+  id         String   @id @default(uuid())
+  name       String
+  /// @ormai:description "User email address for login"
+  email      String   @unique
+  /// @ormai:sensitive
+  password_hash String
+  role       UserRole
+  tenant_id  String
+  created_at DateTime @default(now())
+
+  orders Order[]
+}
+
+/// @ormai:description "A product available for purchase"
+model Product {
+  id          String   @id @default(uuid())
+  name        String
+  description String?
+  /// @ormai:description "Unit price in cents"
+  price       Decimal
+  /// @ormai:description "Units currently in stock"
+  stock       Int
+  tenant_id   String
+  created_at  DateTime @default(now())
+
+  order_items OrderItem[]
+}
+
+/// @ormai:description "A customer purchase order"
+model Order {
+  id       String      @id @default(uuid())
+  status   OrderStatus
+  /// @ormai:description "Order total in cents"
+  total    Decimal
+  /// @ormai:sensitive
+  internal_notes String?
+  tenant_id      String
+  created_at     DateTime @default(now())
+
+  user_id  String
+  customer User        @relation(fields: [user_id], references: [id])
+  items    OrderItem[]
+}
+
+/// @ormai:description "A line item within an order"
+model OrderItem {
+  id         String  @id @default(uuid())
+  quantity   Int
+  /// @ormai:description "Price at time of purchase, in cents"
+  unit_price Decimal
+
+  order_id String
+  order    Order   @relation(fields: [order_id], references: [id])
+
+  product_id String
+  product    Product @relation(fields: [product_id], references: [id])
+}

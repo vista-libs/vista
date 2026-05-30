@@ -53,15 +53,11 @@ export class ORMAI<TContext = DefaultContext> {
   async executeTool(toolName: string, input: unknown, ctx: TContext): Promise<unknown> {
     const schema = await this.loadSchema()
 
-    // Parse resource from tool name to look up policy
-    const resource = extractResource(toolName)
-    const policy = this.policies[resource]
-
     const query = buildResolvedQuery(
       toolName,
       input,
       schema,
-      policy,
+      this.policies,
       ctx,
       this.defaultPolicy
     )

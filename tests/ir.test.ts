@@ -43,7 +43,7 @@ describe("buildResolvedQuery", () => {
       "query_orders",
       {},
       schema,
-      () => ({ read: true }),
+      { orders: () => ({ read: true }) },
       {},
       "deny-all"
     )
@@ -60,7 +60,7 @@ describe("buildResolvedQuery", () => {
         "query_orders",
         { filters: { nonexistent_field: "x" } },
         schema,
-        () => ({ read: true }),
+        { orders: () => ({ read: true }) },
         {},
         "deny-all"
       )
@@ -73,7 +73,7 @@ describe("buildResolvedQuery", () => {
         "query_orders",
         {},
         schema,
-        () => ({ read: false }),
+        { orders: () => ({ read: false }) },
         {},
         "deny-all"
       )
@@ -85,7 +85,7 @@ describe("buildResolvedQuery", () => {
       "query_orders",
       { filters: { status: "active" } },
       schema,
-      () => ({ read: { tenant_id: "tenant-123" } }),
+      { orders: () => ({ read: { tenant_id: "tenant-123" } }) },
       {},
       "deny-all"
     )
@@ -104,7 +104,7 @@ describe("buildResolvedQuery", () => {
         "query_orders",
         { include: ["items"] },
         schema,
-        () => ({ read: true, relations: { items: false } }),
+        { orders: () => ({ read: true, relations: { items: false } }) },
         {},
         "deny-all"
       )
@@ -116,9 +116,9 @@ describe("buildResolvedQuery", () => {
       "query_orders",
       { include: ["items"] },
       schema,
-      () => ({ read: true }),
+      { orders: () => ({ read: true }), items: () => ({ read: true }) },
       {},
-      "allow-all"
+      "deny-all"
     )
     expect(query.include).toBeDefined()
     expect(query.include!.items).toBeDefined()
@@ -131,7 +131,7 @@ describe("buildResolvedQuery", () => {
       "query_orders",
       {},
       schema,
-      () => ({ read: true, fields: { deny: ["amount"] } }),
+      { orders: () => ({ read: true, fields: { deny: ["amount"] } }) },
       {},
       "deny-all"
     )
@@ -143,7 +143,7 @@ describe("buildResolvedQuery", () => {
       "get_orders",
       { id: "order-1" },
       schema,
-      () => ({ read: true }),
+      { orders: () => ({ read: true }) },
       {},
       "deny-all"
     )
@@ -158,7 +158,7 @@ describe("buildResolvedQuery", () => {
         "create_orders",
         { status: "new", tenant_id: "x", amount: 10 },
         schema,
-        () => ({ read: true, write: false }),
+        { orders: () => ({ read: true, write: false }) },
         {},
         "deny-all"
       )
@@ -171,7 +171,7 @@ describe("buildResolvedQuery", () => {
         "query_orders",
         { sort: { field: "amount", direction: "asc" } },
         schema,
-        () => ({ read: true, fields: { allow: ["id", "status"] } }),
+        { orders: () => ({ read: true, fields: { allow: ["id", "status"] } }) },
         {},
         "deny-all"
       )

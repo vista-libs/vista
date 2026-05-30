@@ -34,7 +34,7 @@ export function buildResolvedQuery<TContext>(
   toolName: string,
   input: unknown,
   schema: SchemaMap,
-  policy: PolicyFn<TContext> | undefined,
+  policies: Record<string, PolicyFn<TContext>>,
   ctx: TContext,
   defaultPolicy: "deny-all" | "allow-all"
 ): ResolvedQuery {
@@ -49,7 +49,7 @@ export function buildResolvedQuery<TContext>(
 
   // 3. Evaluate policy
   const policyOp = operationToPolicy(operation)
-  const evaluated = evaluatePolicy(policy, ctx, policyOp, defaultPolicy, resourceSchema)
+  const evaluated = evaluatePolicy(policies[resource], ctx, policyOp, defaultPolicy, resourceSchema)
 
   // 4. Check allowed
   if (!evaluated.allowed) {
@@ -82,16 +82,22 @@ export function buildResolvedQuery<TContext>(
         throw new ValidationError(`Unknown relation "${relationName}" on resource "${resource}"`)
       }
 
-      // Evaluate the related resource's read policy independently
       const relatedSchema = schema.resources[relation.targetResource]
-      const relatedPolicy = undefined as PolicyFn<TContext> | undefined  // policies are passed via ORMAI — handled in caller
-      const relatedEvaluated = evaluatePolicy(relatedPolicy, ctx, "read", defaultPolicy, relatedSchema)
+      const relatedEvaluated = evaluatePolicy(policies[relation.targetResource], ctx, "read", defaultPolicy, relatedSchema)
+
+      // read:false on the related resource only blocks standalone tools — not include access,
+      // which is governed by the parent's relations policy. Fall back to all non-sensitive fields.
+      const relatedFields = relatedEvaluated.allowed
+        ? relatedEvaluated.allowedFields
+        : relatedSchema
+          ? Object.values(relatedSchema.fields).filter(f => !f.sensitive).map(f => f.name)
+          : []
 
       include[relationName] = {
         resource: relation.targetResource,
         type: relation.type,
         foreignKey: relation.foreignKey,
-        fields: relatedEvaluated.allowedFields,
+        fields: relatedFields,
         filters: relatedEvaluated.rowFilter,
       }
     }

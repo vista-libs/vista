@@ -26,9 +26,10 @@ export class PrismaAdapter implements ORMAIAdapter {
     const select = buildSelect(query.fields)
     const include = query.include ? buildInclude(query.include) : undefined
 
-    // Merge select and include — Prisma doesn't allow both at the top level
+    // Merge select and include — Prisma doesn't allow both at the top level.
+    // We use select everywhere: scalar fields + nested relation objects in one select.
     const selectOrInclude = include
-      ? { include: mergeSelectIntoInclude(select, include) }
+      ? { select: { ...select, ...include } }
       : { select }
 
     switch (query.operation) {
@@ -96,22 +97,13 @@ function buildInclude(
     const relWhere = rel.filters ? translateFilter(rel.filters) : undefined
     result[name] = {
       select: relSelect,
-      ...(relWhere ? { where: relWhere } : {}),
+      // Prisma only supports where on toMany relations, not belongsTo
+      ...(relWhere && rel.type !== "belongsTo" ? { where: relWhere } : {}),
     }
   }
   return result
 }
 
-function mergeSelectIntoInclude(
-  select: Record<string, true>,
-  include: Record<string, unknown>
-): Record<string, unknown> {
-  // When using include, we need to specify scalar fields as select inside include
-  // Actually in Prisma, you can't mix top-level select with include.
-  // The proper approach is to use select for scalars and include for relations.
-  // We'll just return include as-is and let Prisma return all scalar fields.
-  return include
-}
 
 export function translateFilter(node: FilterNode): Record<string, unknown> {
   switch (node.type) {

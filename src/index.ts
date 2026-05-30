@@ -1,4 +1,5 @@
 export { ORMAI } from "./ormai"
+export type { LLMTool, GetToolsOptions } from "./ormai"
 export { PrismaAdapter } from "./adapters/prisma"
 export type {
   PolicyFn,
