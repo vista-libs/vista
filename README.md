@@ -66,7 +66,26 @@ const ormai = new ORMAI<DefaultContext, InferResources<typeof prisma>>({
 })
 ```
 
-`InferResources<typeof prisma>` is a type-level transform that converts your Prisma client's model keys (`orderItem`) to ormai resource names (`order_item`). It gives you autocomplete and type errors on policy keys — no manual type declarations needed.
+`InferResources<typeof prisma>` is a type-level transform that converts your Prisma client's model keys (`orderItem`) to ormai resource names (`order_item`). It gives you autocomplete and type errors on policy keys — no manual type declarations needed
+---
+
+## Schema annotations
+
+Annotate your Prisma schema with `///` doc comments to give the LLM better descriptions:
+
+```prisma
+/// @ormai:description "A customer purchase order"
+model Order {
+id     String      @id @default(uuid())
+status OrderStatus
+
+/// @ormai:description "Order total in cents"
+total  Decimal
+
+/// @ormai:sensitive
+internal_notes String?   // never exposed to LLM, regardless of policy
+}
+```
 
 ---
 
@@ -90,6 +109,7 @@ ormai.policy("order", (ctx) => ({
 ```
 
 **`read`, `write`, `delete`** accept:
+
 - `true` — allow
 - `false` — deny (no tools generated for this operation)
 - `{ field: value }` — for `read`/`delete`: row-level WHERE filter; for `write`: forced fields merged into data AND used as a WHERE guard on updates
@@ -138,6 +158,7 @@ For `anthropic`, `openai`, and `gemini` you get an array of `{ definition, name,
 `vercel` is the exception — it returns a ready-to-use Vercel AI SDK `ToolSet` (see below).
 
 **OpenAI:**
+
 ```ts
 const tools = await ormai.tools.openai(ctx)
 
@@ -155,6 +176,7 @@ for (const call of res.choices[0].message.tool_calls ?? []) {
 ```
 
 **Anthropic:**
+
 ```ts
 const tools = await ormai.tools.anthropic(ctx)
 
@@ -172,6 +194,7 @@ const result = await tools.find(t => t.name === block.name)?.execute(block.input
 **Google Gemini:** `t.definition` is a function declaration — wrap the list in `{ functionDeclarations: [...] }`.
 
 **Vercel AI SDK:** `ormai.tools.vercel(ctx)` is special — it returns a ready-to-use `ToolSet` (a record keyed by tool name, each entry already built with `tool()` + `jsonSchema()` and `execute` wired). Drop it straight into `generateText`:
+
 ```ts
 const tools = await ormai.tools.vercel(ctx)
 
@@ -182,9 +205,11 @@ const { text } = await generateText({
   prompt,
 })
 ```
+
 Tool errors are caught and returned as `{ error }` so the agent can recover. Requires the optional peer dependency `ai` (`npm install ai`).
 
 **Any other provider** — pass a formatter to `ormai.tools.format(ctx, fn)`:
+
 ```ts
 const tools = await ormai.tools.format(ctx, (t) => ({
   name: t.name,
@@ -194,26 +219,6 @@ const tools = await ormai.tools.format(ctx, (t) => ({
 ```
 
 > The original flat helpers are still available: `ormai.getTools(ctx)` (Anthropic `input_schema` shape) and `ormai.executableTools(ctx)` (the same, with `execute()` attached).
-
----
-
-## Schema annotations
-
-Annotate your Prisma schema with `///` doc comments to give the LLM better descriptions:
-
-```prisma
-/// @ormai:description "A customer purchase order"
-model Order {
-  id     String      @id @default(uuid())
-  status OrderStatus
-
-  /// @ormai:description "Order total in cents"
-  total  Decimal
-
-  /// @ormai:sensitive
-  internal_notes String?   // never exposed to LLM, regardless of policy
-}
-```
 
 ---
 
