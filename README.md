@@ -1,11 +1,45 @@
 # ormai
 
+**The authorization layer for AI agents.**
+
 Give your LLM agent access to your database. Control exactly what it can see and do.
-Your agent never writes SQL. You write the policy. ormai handles the rest.
 
-ormai sits between your AI agent and your database. It reads your schema, generates typed tools the LLM can call, and enforces access control server-side — on every query, regardless of what the model was told to do.
+ormai reads your ORM schema, generates typed tools the model can call, and enforces access control server-side — on every query, regardless of what the model was told to do.
 
-No query strings. No prompt-level access control. No per-endpoint boilerplate.
+```ts
+const tools = await ormai.tools.vercel(ctx)
+await generateText({ model, tools, maxSteps: 5, prompt })
+```
+
+The agent sees only what the current user is allowed to see. No SQL generation. No prompt-based permissions. No per-endpoint wrappers.
+
+---
+
+## The problem
+
+Most agents reach your data through one of these:
+
+```
+LLM → SQL          LLM → ORM          LLM → API endpoints
+```
+
+…and authorization usually lives in the prompt:
+
+> "Only return data for the current tenant."
+
+That holds right up until the model ignores the instruction, a prompt injection lands, a tool is misconfigured, or someone forgets a filter. A prompt is not a security boundary. One slip leaks customer data.
+
+## The solution
+
+With ormai, permissions live in code — not prompts.
+
+```ts
+ormai.policy("order", (ctx) => ({
+  read: { tenant_id: ctx.tenant.id },
+}))
+```
+
+That filter is AND-ed into every read, server-side, after the tool call is parsed. The model cannot widen it, override it, or talk its way around it — the filtered query is the only query that runs.
 
 ---
 
@@ -23,11 +57,11 @@ No query strings. No prompt-level access control. No per-endpoint boilerplate.
 | **Customer relation** | ✓ | ✗ blocked | ✓ |
 | **Orders returned** | #1, #3 | #1, #3 | #5, #6 |
 
-Alice gets full output. Bob gets no customer link and `user_id` stripped. Carol only sees her tenant — `tenant-alpha` orders are structurally invisible to her. All from one policy function.
+Alice gets full output. Bob gets no customer link and `user_id` stripped. Carol only sees her tenant — `tenant-alpha` orders are structurally invisible to her. All from one policy function, no branching in your prompt.
 
 ---
 
-## The code
+## The policy
 
 ```ts
 import { ORMAI } from "ormai"
@@ -39,7 +73,7 @@ const ormai = new ORMAI<Ctx, InferResources<typeof prisma>>({
 })
 
 ormai.policy("order", (ctx) => ({
-  read:   { tenant_id: ctx.tenant.id },  // row filter — AND-ed into every SELECT
+  read:   { tenant_id: ctx.tenant.id },  // row filter — AND-ed into every read
   write:  { tenant_id: ctx.tenant.id },  // force-injected on INSERT, guards UPDATE WHERE
   delete: false,                          // delete_order tool never generated
   fields:    { deny: ctx.user.role === "support" ? ["user_id"] : [] },
@@ -67,6 +101,22 @@ Connect to your agent in one line:
 const tools = await ormai.tools.vercel(ctx)
 const { text } = await generateText({ model, tools, maxSteps: 8, prompt })
 ```
+
+---
+
+## How it works
+
+```
+LLM
+ ↓   tool call (no SQL, just arguments)
+ormai policy engine        ← row filters, write injection, field stripping, tool suppression
+ ↓
+your ORM
+ ↓
+database
+```
+
+The model never writes a query. It calls a typed tool with arguments; ormai resolves that into an ORM operation, applies the policy *before* execution, and runs it. Enforcement happens on the server, in your process — not in the prompt and not on the model's honor.
 
 ---
 
@@ -112,7 +162,6 @@ Use `///` doc comments to give the LLM better context and mark fields that must 
 model Order {
   id     String @id @default(uuid())
   status OrderStatus
-  total  Decimal
 
   /// @ormai:description "Order total in cents"
   total  Decimal
@@ -184,6 +233,15 @@ For each resource, ormai generates up to six tools based on what the policy allo
 | `ormai.tools.format(ctx, fn)` | Any other provider — pass your own formatter |
 
 ```ts
+// OpenAI
+const tools = await ormai.tools.openai(ctx)
+
+await openai.responses.create({
+  model: "gpt-5",
+  tools,
+  input: "Show this customer's recent orders",
+})
+
 // Vercel AI SDK
 const tools = await ormai.tools.vercel(ctx)
 await generateText({ model, tools, maxSteps: 5, prompt })
