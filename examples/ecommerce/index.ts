@@ -2,17 +2,14 @@ import "dotenv/config"
 import { createOpenRouter } from "@openrouter/ai-sdk-provider"
 import { generateText } from "ai"
 import { PrismaClient } from "@prisma/client"
-import { ORMAI } from "ormai"
-import { PrismaAdapter } from "@ormai/prisma"
-import type { DefaultContext, InferResources } from "ormai"
+import { createOrmai } from "@ormai/prisma"
 
 // ── Setup ─────────────────────────────────────────────────────────────────────
 
 const prisma = new PrismaClient()
 const openrouter = createOpenRouter({ apiKey: process.env.OPENROUTER_API_KEY! })
 
-const ormai = new ORMAI<DefaultContext, InferResources<typeof prisma>>({
-  adapter: new PrismaAdapter(prisma, "./prisma/schema.prisma"),
+const ormai = createOrmai(prisma, {
   defaultPolicy: "deny-all",
   onQuery: ({ toolName, resource, durationMs, error }) => {
     if (error) console.warn(`  [audit] ${toolName} on ${resource} failed in ${durationMs}ms: ${error.message}`)
