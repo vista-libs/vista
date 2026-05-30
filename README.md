@@ -64,13 +64,9 @@ Alice gets full output. Bob gets no customer link and `user_id` stripped. Carol 
 ## The policy
 
 ```ts
-import { ORMAI } from "ormai"
-import { PrismaAdapter } from "@ormai/prisma"
+import { createOrmai } from "@ormai/prisma"
 
-const ormai = new ORMAI<Ctx, InferResources<typeof prisma>>({
-  adapter: new PrismaAdapter(prisma, "./prisma/schema.prisma"),
-  defaultPolicy: "deny-all",
-})
+const ormai = createOrmai(prisma, { defaultPolicy: "deny-all" })
 
 ormai.policy("order", (ctx) => ({
   read:   { tenant_id: ctx.tenant.id },  // row filter — AND-ed into every read
@@ -137,19 +133,15 @@ npm install ormai @ormai/prisma
 ## Setup
 
 ```ts
-import { ORMAI } from "ormai"
-import { PrismaAdapter } from "@ormai/prisma"
-import type { DefaultContext, InferResources } from "ormai"
+import { PrismaClient } from "@prisma/client"
+import { createOrmai } from "@ormai/prisma"
 
 const prisma = new PrismaClient()
 
-const ormai = new ORMAI<DefaultContext, InferResources<typeof prisma>>({
-  adapter: new PrismaAdapter(prisma, "./prisma/schema.prisma"),
-  defaultPolicy: "deny-all",
-})
+const ormai = createOrmai(prisma, { defaultPolicy: "deny-all" })
 ```
 
-`InferResources<typeof prisma>` converts Prisma model keys (`orderItem`) to ormai resource names (`order_item`). Policy keys are type-checked — a typo is a compile error.
+`createOrmai` infers the resource types from your Prisma client — policy keys are type-checked, so a typo is a compile error. Pass `schemaPath` if your schema isn't at the default `./prisma/schema.prisma`.
 
 ---
 
