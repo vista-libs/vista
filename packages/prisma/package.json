@@ -1,6 +1,6 @@
 {
   "name": "@vistal/prisma",
-  "version": "0.1.0",
+  "version": "0.1.1",
   "description": "Prisma adapter for vistal — row-level security and access control for AI agents",
   "keywords": [
     "prisma",
