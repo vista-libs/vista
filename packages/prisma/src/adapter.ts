@@ -1,8 +1,8 @@
 import type { PrismaClient } from "@prisma/client"
-import type { VistaAdapter, SchemaMap, ResolvedQuery, FilterNode, ResolvedInclude } from "@vista/core"
+import type { VistalAdapter, SchemaMap, ResolvedQuery, FilterNode, ResolvedInclude } from "@vistal/core"
 import { introspectPrisma } from "./introspection"
 
-export class PrismaAdapter implements VistaAdapter {
+export class PrismaAdapter implements VistalAdapter {
   constructor(
     private prisma: PrismaClient,
     private schemaPath?: string

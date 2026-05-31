@@ -1,6 +1,6 @@
 import { describe, it, expect, vi } from "vitest"
-import { translateFilter, PrismaAdapter } from "@vista/prisma"
-import type { ResolvedQuery } from "@vista/core"
+import { translateFilter, PrismaAdapter } from "@vistal/prisma"
+import type { ResolvedQuery } from "@vistal/core"
 
 describe("translateFilter", () => {
   it("EqFilter", () => {
@@ -77,6 +77,47 @@ describe("translateFilter", () => {
       type: "not",
       filter: { type: "eq", field: "status", value: "deleted" },
     })).toEqual({ NOT: { status: "deleted" } })
+  })
+
+  it("deeply nested OR inside AND (tenant guard + status OR amount range)", () => {
+    expect(translateFilter({
+      type: "and",
+      filters: [
+        { type: "eq", field: "tenant_id", value: "t1" },
+        {
+          type: "or",
+          filters: [
+            { type: "range", field: "total", gte: 10000 },
+            { type: "eq", field: "status", value: "pending" },
+          ],
+        },
+      ],
+    })).toEqual({
+      AND: [
+        { tenant_id: "t1" },
+        { OR: [{ total: { gte: 10000 } }, { status: "pending" }] },
+      ],
+    })
+  })
+
+  it("not(and(eq, like)) — negated compound filter", () => {
+    expect(translateFilter({
+      type: "not",
+      filter: {
+        type: "and",
+        filters: [
+          { type: "eq", field: "status", value: "cancelled" },
+          { type: "like", field: "name", value: "test", mode: "contains" },
+        ],
+      },
+    })).toEqual({
+      NOT: {
+        AND: [
+          { status: "cancelled" },
+          { name: { contains: "test", mode: "insensitive" } },
+        ],
+      },
+    })
   })
 })
 
@@ -242,6 +283,146 @@ describe("PrismaAdapter.execute", () => {
     // Relations are merged into select, not a separate include key
     expect(call.select.items.select).toEqual({ id: true, name: true })
     expect(call.select.items.where).toEqual({ active: true })
+  })
+
+  it("two simultaneous includes (belongsTo + hasMany) both appear in select", async () => {
+    const { adapter, mocks } = makeAdapter()
+    const query: ResolvedQuery = {
+      resource: "orders",
+      operation: "find",
+      fields: ["id", "total"],
+      include: {
+        customer: {
+          resource: "users",
+          type: "belongsTo",
+          foreignKey: "user_id",
+          fields: ["id", "name"],
+        },
+        items: {
+          resource: "order_items",
+          type: "hasMany",
+          foreignKey: "order_id",
+          fields: ["id", "quantity", "unit_price"],
+          filters: { type: "eq", field: "tenant_id", value: "t1" },
+        },
+      },
+    }
+    await adapter.execute(query)
+    const call = mocks.findMany.mock.calls[0][0]
+    expect(call.select.customer.select).toEqual({ id: true, name: true })
+    expect(call.select.items.select).toEqual({ id: true, quantity: true, unit_price: true })
+    // hasMany filter pushed into where; belongsTo filter deferred post-fetch
+    expect(call.select.items.where).toEqual({ tenant_id: "t1" })
+    expect(call.select.customer.where).toBeUndefined()
+    // Scalar fields still present
+    expect(call.select.id).toBe(true)
+    expect(call.select.total).toBe(true)
+  })
+
+  it("aggregate (flat count) → prisma.aggregate with _count and scoped where", async () => {
+    const aggregate = vi.fn().mockResolvedValue({ _count: { id: 4 } })
+    const prisma = {
+      orders: { aggregate },
+    } as unknown as import("@prisma/client").PrismaClient
+    const adapter = new PrismaAdapter(prisma)
+
+    const query: ResolvedQuery = {
+      resource: "orders",
+      operation: "aggregate",
+      fields: [],
+      filters: { type: "eq", field: "tenant_id", value: "t1" },
+      aggregations: [{ fn: "count", field: "id", alias: "total_orders" }],
+    }
+    await adapter.execute(query)
+    expect(aggregate).toHaveBeenCalledWith(
+      expect.objectContaining({
+        where: { tenant_id: "t1" },
+        _count: expect.objectContaining({ id: true }),
+      })
+    )
+  })
+
+  it("aggregate (sum + avg) → prisma.aggregate with _sum and _avg", async () => {
+    const aggregate = vi.fn().mockResolvedValue({ _sum: { total: 100 }, _avg: { total: 25 } })
+    const prisma = {
+      orders: { aggregate },
+    } as unknown as import("@prisma/client").PrismaClient
+    const adapter = new PrismaAdapter(prisma)
+
+    const query: ResolvedQuery = {
+      resource: "orders",
+      operation: "aggregate",
+      fields: [],
+      filters: { type: "eq", field: "tenant_id", value: "t1" },
+      aggregations: [
+        { fn: "sum", field: "total", alias: "revenue" },
+        { fn: "avg", field: "total", alias: "avg_order" },
+      ],
+    }
+    await adapter.execute(query)
+    expect(aggregate).toHaveBeenCalledWith(
+      expect.objectContaining({
+        where: { tenant_id: "t1" },
+        _sum: { total: true },
+        _avg: { total: true },
+      })
+    )
+  })
+
+  it("aggregate groupBy → prisma.groupBy with _sum and scoped where", async () => {
+    const groupBy = vi.fn().mockResolvedValue([
+      { status: "delivered", _sum: { total: 150000 } },
+      { status: "pending",   _sum: { total: 30000 } },
+    ])
+    const prisma = {
+      orders: { groupBy },
+    } as unknown as import("@prisma/client").PrismaClient
+    const adapter = new PrismaAdapter(prisma)
+
+    const query: ResolvedQuery = {
+      resource: "orders",
+      operation: "aggregate",
+      fields: [],
+      filters: { type: "eq", field: "tenant_id", value: "t1" },
+      aggregations: [{ fn: "sum", field: "total", alias: "revenue" }],
+      groupBy: ["status"],
+    }
+    await adapter.execute(query)
+    expect(groupBy).toHaveBeenCalledWith(
+      expect.objectContaining({
+        by: ["status"],
+        _sum: { total: true },
+        where: { tenant_id: "t1" },
+      })
+    )
+  })
+
+  it("aggregate groupBy multi-field → prisma.groupBy with multiple by fields", async () => {
+    const groupBy = vi.fn().mockResolvedValue([])
+    const prisma = {
+      orders: { groupBy },
+    } as unknown as import("@prisma/client").PrismaClient
+    const adapter = new PrismaAdapter(prisma)
+
+    const query: ResolvedQuery = {
+      resource: "orders",
+      operation: "aggregate",
+      fields: [],
+      filters: { type: "eq", field: "tenant_id", value: "t1" },
+      aggregations: [
+        { fn: "count", field: "id", alias: "order_count" },
+        { fn: "sum",   field: "total", alias: "revenue" },
+      ],
+      groupBy: ["status", "user_id"],
+    }
+    await adapter.execute(query)
+    expect(groupBy).toHaveBeenCalledWith(
+      expect.objectContaining({
+        by: ["status", "user_id"],
+        _count: expect.objectContaining({ id: true }),
+        _sum: { total: true },
+      })
+    )
   })
 
   it("belongsTo included record is nulled out when it fails the relation's row filter", async () => {

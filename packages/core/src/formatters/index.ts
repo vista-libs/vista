@@ -3,7 +3,7 @@ import { NeutralTool } from "../tools/generator"
 /**
  * A tool formatter converts a provider-neutral {@link NeutralTool} into the
  * shape a specific LLM provider expects. Built-ins are exported below; pass your
- * own function to `vista.tools.format(ctx, fn)` to support any other provider.
+ * own function to `vistal.tools.format(ctx, fn)` to support any other provider.
  */
 export type ToolFormatter<T = unknown> = (tool: NeutralTool) => T
 

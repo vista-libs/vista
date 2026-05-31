@@ -1,4 +1,4 @@
-export { Vista } from "./vista"
+export { Vistal } from "./vistal"
 export type {
   LLMTool,
   ExecutableTool,
@@ -8,13 +8,13 @@ export type {
   ResourceDescriptor,
   ResourceField,
   ResourceRelation,
-  VistaAdapter,
-  VistaConfig,
-} from "./vista"
+  VistalAdapter,
+  VistalConfig,
+} from "./vistal"
 export { serializeResult } from "./serializer"
 
 // Tool formatters — turn a provider-neutral tool into a provider-specific shape.
-// Built-ins are also reachable via `vista.tools.<provider>(ctx)`.
+// Built-ins are also reachable via `vistal.tools.<provider>(ctx)`.
 export * as formats from "./formatters"
 export { anthropic, openai, gemini } from "./formatters"
 export type {

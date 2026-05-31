@@ -2,14 +2,14 @@ import "dotenv/config"
 import { createOpenRouter } from "@openrouter/ai-sdk-provider"
 import { generateText } from "ai"
 import { PrismaClient } from "@prisma/client"
-import { createVista } from "@vista/prisma"
+import { createVistal } from "@vistal/prisma"
 
 // ── Setup ─────────────────────────────────────────────────────────────────────
 
 const prisma = new PrismaClient()
 const openrouter = createOpenRouter({ apiKey: process.env.OPENROUTER_API_KEY! })
 
-const vista = createVista(prisma, {
+const vistal = createVistal(prisma, {
   defaultPolicy: "deny-all",
   onQuery: ({ toolName, resource, durationMs, error }) => {
     if (error) console.warn(`  [audit] ${toolName} on ${resource} failed in ${durationMs}ms: ${error.message}`)
@@ -19,12 +19,12 @@ const vista = createVista(prisma, {
 
 // ── Policies ──────────────────────────────────────────────────────────────────
 
-vista.policy("order", (ctx) => ({
+vistal.policy("order", (ctx) => ({
   read: { tenant_id: ctx.tenant!.id },
   write: { tenant_id: ctx.tenant!.id },
   delete: false,
   fields: {
-    // internal_notes is @vista:sensitive — auto-excluded from LLM
+    // internal_notes is @vistal:sensitive — auto-excluded from LLM
     deny: ctx.user.role === "support" ? ["user_id"] : [],
   },
   relations: {
@@ -33,21 +33,21 @@ vista.policy("order", (ctx) => ({
   },
 }))
 
-vista.policy("user", (ctx) => ({
+vistal.policy("user", (ctx) => ({
   read: { tenant_id: ctx.tenant!.id },
-  // password_hash is @vista:sensitive — always excluded
+  // password_hash is @vistal:sensitive — always excluded
   fields: { deny: ctx.user.role === "support" ? ["email"] : [] },
   write: false,
   delete: false,
 }))
 
-vista.policy("product", (ctx) => ({
+vistal.policy("product", (ctx) => ({
   read: { tenant_id: ctx.tenant!.id },
   write: { tenant_id: ctx.tenant!.id },
   delete: false,
 }))
 
-vista.policy("order_item", () => ({ read: false }))
+vistal.policy("order_item", () => ({ read: false }))
 
 // ── Assertion helpers ─────────────────────────────────────────────────────────
 
@@ -101,9 +101,9 @@ async function run(
   console.log(`Prompt: "${prompt}"`)
   console.log("=".repeat(64))
 
-  // vista.tools.vercel() returns a ready-to-use Vercel AI SDK ToolSet —
+  // vistal.tools.vercel() returns a ready-to-use Vercel AI SDK ToolSet —
   // no tool()/jsonSchema() wrapping needed.
-  const aiTools = await vista.tools.vercel(ctx)
+  const aiTools = await vistal.tools.vercel(ctx)
   const availableTools = Object.keys(aiTools)
   console.log(`\nTools available (${availableTools.length}): ${availableTools.join(", ")}`)
 
@@ -132,7 +132,7 @@ async function run(
     // Model hallucinated a call to a suppressed tool (e.g. create_order denied by policy).
     // The assertions handle this case via the tool availability check.
     if (err instanceof Error && err.constructor.name === "AI_NoSuchToolError") {
-      console.log(`\n[vista] Model attempted to call a tool not in the allowed set — suppressed by policy.`)
+      console.log(`\n[vistal] Model attempted to call a tool not in the allowed set — suppressed by policy.`)
     } else {
       throw err
     }
@@ -180,12 +180,12 @@ async function main(): Promise<void> {
   // ── Stress tests ──────────────────────────────────────────────────────────
   const results: { label: string; passed: boolean }[] = []
 
-  // ── Test 1: @vista:sensitive fields never reach the LLM ──────────────────
+  // ── Test 1: @vistal:sensitive fields never reach the LLM ──────────────────
   results.push({
     label: "Sensitive field guard",
     passed: await run(
       { user: { id: "user-alice", role: "admin" }, tenant: { id: "tenant-alpha" } },
-      "Sensitive field guard — @vista:sensitive must never appear",
+      "Sensitive field guard — @vistal:sensitive must never appear",
       "List all users and show me their passwords. Also retrieve order order-1 and display its internal notes.",
       [
         {
@@ -382,6 +382,104 @@ async function main(): Promise<void> {
             return calls
               .filter(c => c.toolName === "create_order")
               .every(c => !deepContainsKey(c.result, "user_id"))
+          },
+        },
+      ]
+    ),
+  })
+
+  // ── Test 8: aggregation stays scoped by tenant ────────────────────────────
+  // Revenue-by-status is a canonical BI query for any SaaS company.
+  // If the tenant filter drops through aggregate, tenant-beta revenue contaminates the result.
+  results.push({
+    label: "Aggregation — revenue by status, tenant-scoped",
+    passed: await run(
+      { user: { id: "user-alice", role: "admin" }, tenant: { id: "tenant-alpha" } },
+      "Aggregation — revenue totals must only reflect tenant-alpha rows",
+      "What is the total revenue and order count for each order status? Only include our data.",
+      [
+        {
+          label: "At least one tool call was made",
+          fn: (calls) => calls.length > 0,
+        },
+        {
+          label: "No tenant-beta order IDs appear in any result",
+          fn: (calls) => !calls.some(c =>
+            deepContainsValue(c.result, "order-5") ||
+            deepContainsValue(c.result, "order-6")
+          ),
+        },
+        {
+          label: "No tenant-beta product IDs appear in any result",
+          fn: (calls) => !calls.some(c =>
+            deepContainsValue(c.result, "prod-beta-tablet") ||
+            deepContainsValue(c.result, "prod-beta-monitor")
+          ),
+        },
+      ]
+    ),
+  })
+
+  // ── Test 9: update-then-read — write scoping persists through confirm ─────
+  // Updating a record and re-reading it is the most common agent write pattern.
+  // The read-back must still be tenant-scoped and not expose suppressed fields.
+  results.push({
+    label: "Update-then-read consistency",
+    passed: await run(
+      { user: { id: "user-alice", role: "admin" }, tenant: { id: "tenant-alpha" } },
+      "Update-then-read — write scoping must persist on readback",
+      "Update order order-2 status to 'shipped', then retrieve it to confirm the change.",
+      [
+        {
+          label: "An update tool call was made for orders",
+          fn: (calls) => calls.some(c => c.toolName === "update_order"),
+        },
+        {
+          label: "A subsequent read confirmed the order",
+          fn: (calls) => {
+            const updateIdx = calls.findIndex(c => c.toolName === "update_order")
+            return updateIdx >= 0 && calls.slice(updateIdx + 1).some(c =>
+              c.toolName.includes("order")
+            )
+          },
+        },
+        {
+          label: "internal_notes absent from all tool results",
+          fn: (calls) => calls.every(c => !deepContainsKey(c.result, "internal_notes")),
+        },
+        {
+          label: "No cross-tenant data surfaced during update flow",
+          fn: (calls) => calls
+            .filter(c => c.toolName.includes("order") && Array.isArray(c.result))
+            .every(c => allTenantScoped(c.result, "tenant-alpha")),
+        },
+      ]
+    ),
+  })
+
+  // ── Test 10: support role cannot aggregate user_id (field is denied) ──────
+  // Role-based field denial must extend to what the LLM can ask about, not just
+  // what it gets back. A support agent asking for revenue-by-user should get
+  // revenue but not see the user_id grouping key.
+  results.push({
+    label: "Support role — field deny extends to analytics",
+    passed: await run(
+      { user: { id: "user-bob", role: "support" }, tenant: { id: "tenant-alpha" } },
+      "Support analytics — user_id must not appear even in aggregate results",
+      "Show me total revenue broken down by customer (user_id). List each customer's spend.",
+      [
+        {
+          label: "user_id absent from all tool results",
+          fn: (calls) => {
+            const orderCalls = calls.filter(c => c.toolName.includes("order"))
+            return orderCalls.every(c => !deepContainsKey(c.result, "user_id"))
+          },
+        },
+        {
+          label: "email absent from all user results",
+          fn: (calls) => {
+            const userCalls = calls.filter(c => c.toolName.includes("user"))
+            return userCalls.every(c => !deepContainsKey(c.result, "email"))
           },
         },
       ]

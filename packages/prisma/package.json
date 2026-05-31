@@ -1,7 +1,7 @@
 {
-  "name": "@vista/prisma",
+  "name": "@vistal/prisma",
   "version": "0.1.0",
-  "description": "Prisma adapter for vista",
+  "description": "Prisma adapter for vistal",
   "auhtor": "Nicolò D'Addabbo <nicolodaddabbo@gmail.com> (https://nicolod.com)",
   "main": "dist/index.js",
   "types": "dist/index.d.ts",
@@ -13,6 +13,6 @@
   },
   "peerDependencies": {
     "@prisma/client": "^5.0.0",
-    "@vista/core": "^0.1.0"
+    "@vistal/core": "^0.1.0"
   }
 }

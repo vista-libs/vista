@@ -1,6 +1,6 @@
 import { SchemaMap, PolicyFn, ResourceSchema, FieldSchema } from "../types"
 import { evaluatePolicy, EvaluatedPolicy } from "../policy/engine"
-import { GetToolsOptions } from "../vista"
+import { GetToolsOptions } from "../vistal"
 
 /**
  * Provider-neutral tool definition. This is the single source of truth from

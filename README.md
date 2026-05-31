@@ -1,13 +1,13 @@
-# vista
+# vistal
 
 **The authorization layer for AI agents.**
 
 Give your LLM agent access to your database. Control exactly what it can see and do.
 
-vista reads your ORM schema, generates typed tools the model can call, and enforces access control server-side — on every query, regardless of what the model was told to do.
+vistal reads your ORM schema, generates typed tools the model can call, and enforces access control server-side — on every query, regardless of what the model was told to do.
 
 ```ts
-const tools = await vista.tools.vercel(ctx)
+const tools = await vistal.tools.vercel(ctx)
 await generateText({ model, tools, maxSteps: 5, prompt })
 ```
 
@@ -31,10 +31,10 @@ That holds right up until the model ignores the instruction, a prompt injection 
 
 ## The solution
 
-With vista, permissions live in code — not prompts.
+With vistal, permissions live in code — not prompts.
 
 ```ts
-vista.policy("order", (ctx) => ({
+vistal.policy("order", (ctx) => ({
   read: { tenant_id: ctx.tenant.id },
 }))
 ```
@@ -64,11 +64,11 @@ Alice gets full output. Bob gets no customer link and `user_id` stripped. Carol 
 ## The policy
 
 ```ts
-import { createVista } from "@vista/prisma"
+import { createVistal } from "@vistal/prisma"
 
-const vista = createVista(prisma, { defaultPolicy: "deny-all" })
+const vistal = createVistal(prisma, { defaultPolicy: "deny-all" })
 
-vista.policy("order", (ctx) => ({
+vistal.policy("order", (ctx) => ({
   read:   { tenant_id: ctx.tenant.id },  // row filter — AND-ed into every read
   write:  { tenant_id: ctx.tenant.id },  // force-injected on INSERT, guards UPDATE WHERE
   delete: false,                          // delete_order tool never generated
@@ -94,7 +94,7 @@ aggregate_order                    aggregate_order
 Connect to your agent in one line:
 
 ```ts
-const tools = await vista.tools.vercel(ctx)
+const tools = await vistal.tools.vercel(ctx)
 const { text } = await generateText({ model, tools, maxSteps: 8, prompt })
 ```
 
@@ -105,28 +105,28 @@ const { text } = await generateText({ model, tools, maxSteps: 8, prompt })
 ```
 LLM
  ↓   tool call (no SQL, just arguments)
-vista policy engine        ← row filters, write injection, field stripping, tool suppression
+vistal policy engine        ← row filters, write injection, field stripping, tool suppression
  ↓
 your ORM
  ↓
 database
 ```
 
-The model never writes a query. It calls a typed tool with arguments; vista resolves that into an ORM operation, applies the policy *before* execution, and runs it. Enforcement happens on the server, in your process — not in the prompt and not on the model's honor.
+The model never writes a query. It calls a typed tool with arguments; vistal resolves that into an ORM operation, applies the policy *before* execution, and runs it. Enforcement happens on the server, in your process — not in the prompt and not on the model's honor.
 
 ---
 
 ## Installation
 
 ```bash
-npm install vista @vista/prisma
+npm install @vistal/core @vistal/prisma
 ```
 
 | Package | Contents |
 |---|---|
-| `/core` | Zero-dependency core — policies, tool generation, IR |
-| `@vista/prisma` | Prisma adapter + schema introspection (requires Prisma 5+) |
-| `ai` | Optional — only needed for `vista.tools.vercel()` |
+| `@vistal/core` | Zero-dependency core — policies, tool generation, IR |
+| `@vistal/prisma` | Prisma adapter + schema introspection (requires Prisma 5+) |
+| `ai` | Optional — only needed for `vistal.tools.vercel()` |
 
 ---
 
@@ -134,14 +134,14 @@ npm install vista @vista/prisma
 
 ```ts
 import { PrismaClient } from "@prisma/client"
-import { createVista } from "@vista/prisma"
+import { createVistal } from "@vistal/prisma"
 
 const prisma = new PrismaClient()
 
-const vista = createVista(prisma, { defaultPolicy: "deny-all" })
+const vistal = createVistal(prisma, { defaultPolicy: "deny-all" })
 ```
 
-`createVista` infers the resource types from your Prisma client — policy keys are type-checked, so a typo is a compile error. Pass `schemaPath` if your schema isn't at the default `./prisma/schema.prisma`.
+`createVistal` infers the resource types from your Prisma client — policy keys are type-checked, so a typo is a compile error. Pass `schemaPath` if your schema isn't at the default `./prisma/schema.prisma`.
 
 ---
 
@@ -150,20 +150,20 @@ const vista = createVista(prisma, { defaultPolicy: "deny-all" })
 Use `///` doc comments to give the LLM better context and mark fields that must never leave the server:
 
 ```prisma
-/// @vista:description "A customer purchase order"
+/// @vistal:description "A customer purchase order"
 model Order {
   id     String @id @default(uuid())
   status OrderStatus
 
-  /// @vista:description "Order total in cents"
+  /// @vistal:description "Order total in cents"
   total  Decimal
 
-  /// @vista:sensitive
+  /// @vistal:sensitive
   internal_notes String?  // stripped at introspection — never in schemas, args, or results
 }
 ```
 
-`@vista:sensitive` is enforced before policy runs. The field doesn't exist as far as the LLM is concerned.
+`@vistal:sensitive` is enforced before policy runs. The field doesn't exist as far as the LLM is concerned.
 
 ---
 
@@ -171,14 +171,14 @@ model Order {
 
 ```ts
 // Everything defaults to the tenant scope
-vista.policy("*", (ctx) => ({
+vistal.policy("*", (ctx) => ({
   read:   { tenant_id: ctx.tenant.id },
   write:  { tenant_id: ctx.tenant.id },
   delete: false,
 }))
 
 // Per-resource: override and extend
-vista.policy("order", (ctx) => ({
+vistal.policy("order", (ctx) => ({
   read:   { tenant_id: ctx.tenant.id },
   write:  { tenant_id: ctx.tenant.id },
   delete: false,
@@ -199,7 +199,7 @@ vista.policy("order", (ctx) => ({
 
 ## Generated tools
 
-For each resource, vista generates up to six tools based on what the policy allows:
+For each resource, vistal generates up to six tools based on what the policy allows:
 
 | Tool | Operation |
 |---|---|
@@ -218,15 +218,15 @@ For each resource, vista generates up to six tools based on what the policy allo
 
 | Method | Use with |
 |---|---|
-| `vista.tools.vercel(ctx)` | Vercel AI SDK — drops straight into `generateText` / `streamText` |
-| `vista.tools.anthropic(ctx)` | Anthropic Messages API |
-| `vista.tools.openai(ctx)` | OpenAI / any OpenAI-compatible API |
-| `vista.tools.gemini(ctx)` | Google Gemini |
-| `vista.tools.format(ctx, fn)` | Any other provider — pass your own formatter |
+| `vistal.tools.vercel(ctx)` | Vercel AI SDK — drops straight into `generateText` / `streamText` |
+| `vistal.tools.anthropic(ctx)` | Anthropic Messages API |
+| `vistal.tools.openai(ctx)` | OpenAI / any OpenAI-compatible API |
+| `vistal.tools.gemini(ctx)` | Google Gemini |
+| `vistal.tools.format(ctx, fn)` | Any other provider — pass your own formatter |
 
 ```ts
 // OpenAI
-const tools = await vista.tools.openai(ctx)
+const tools = await vistal.tools.openai(ctx)
 
 await openai.responses.create({
   model: "gpt-5",
@@ -235,16 +235,16 @@ await openai.responses.create({
 })
 
 // Vercel AI SDK
-const tools = await vista.tools.vercel(ctx)
+const tools = await vistal.tools.vercel(ctx)
 await generateText({ model, tools, maxSteps: 5, prompt })
 
 // Anthropic
-const tools = await vista.tools.anthropic(ctx)
+const tools = await vistal.tools.anthropic(ctx)
 await anthropic.messages.create({ tools: tools.map(t => t.definition) })
 const result = await tools.find(t => t.name === block.name)!.execute(block.input)
 
 // Custom provider
-const tools = await vista.tools.format(ctx, (t) => ({ id: t.name, schema: t.parameters }))
+const tools = await vistal.tools.format(ctx, (t) => ({ id: t.name, schema: t.parameters }))
 ```
 
 Tool errors are caught and returned as `{ error }` so the agent can recover rather than abort.
@@ -254,7 +254,7 @@ Tool errors are caught and returned as `{ error }` so the agent can recover rath
 ## Observability
 
 ```ts
-new Vista({
+new Vistal({
   onQuery: ({ toolName, resource, durationMs, error }) => {
     logger.info({ toolName, resource, durationMs })
     if (error) logger.error({ toolName, error: error.message })
@@ -279,7 +279,7 @@ new Vista({
 
 ## Other adapters
 
-`@vista/prisma` is the first adapter. Everything above it — policies, tool generation, the query IR — is ORM-agnostic. An adapter is two methods:
+`@vistal/prisma` is the first adapter. Everything above it — policies, tool generation, the query IR — is ORM-agnostic. An adapter is two methods:
 
 ```ts
 import type { VistaAdapter, SchemaMap, ResolvedQuery } from "/core"

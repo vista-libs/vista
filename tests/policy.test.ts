@@ -1,6 +1,6 @@
 import { describe, it, expect } from "vitest"
 import { evaluatePolicy, mergeFilters } from "../packages/core/src/policy/engine"
-import type { ResourceSchema } from "@vista/core"
+import type { ResourceSchema } from "@vistal/core"
 
 const mockResource: ResourceSchema = {
   name: "orders",

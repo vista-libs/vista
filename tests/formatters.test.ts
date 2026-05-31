@@ -1,6 +1,6 @@
 import { describe, it, expect } from "vitest"
-import { anthropic, openai, gemini } from "@vista/core"
-import type { NeutralTool } from "@vista/core"
+import { anthropic, openai, gemini } from "@vistal/core"
+import type { NeutralTool } from "@vistal/core"
 
 const tool: NeutralTool = {
   name: "query_orders",

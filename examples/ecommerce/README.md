@@ -1,6 +1,6 @@
-# vista ecommerce example
+# vistal ecommerce example
 
-Demonstrates vista's core value: the same LLM agent, the same question, different access context → different data visible.
+Demonstrates vistal's core value: the same LLM agent, the same question, different access context → different data visible.
 
 Three scenarios run back-to-back against a real Postgres database:
 
@@ -10,7 +10,7 @@ Three scenarios run back-to-back against a real Postgres database:
 | Support | bob @ tenant-alpha | No customer relation, `user_id` field stripped, no write tools |
 | Cross-tenant | carol @ tenant-beta | Zero results — tenant-alpha data is invisible |
 
-`internal_notes` on orders is marked `@vista:sensitive` in the schema and is **never** sent to the LLM regardless of role.
+`internal_notes` on orders is marked `@vistal:sensitive` in the schema and is **never** sent to the LLM regardless of role.
 
 ## Prerequisites
 
@@ -21,8 +21,8 @@ Three scenarios run back-to-back against a real Postgres database:
 ## Quick start
 
 ```bash
-# 1. Build the vista library
-cd /path/to/vista
+# 1. Build the vistal library
+cd /path/to/vistal
 npm install && npm run build
 
 # 2. Install example dependencies
@@ -57,5 +57,5 @@ npm start
 ## Key code sections in `index.ts`
 
 - **Lines 20–55** — policy definitions: where role-based and tenant-based rules are declared
-- **Lines 57–110** — `runAgentDemo`: the agentic loop that calls Claude and executes tool calls through vista
+- **Lines 57–110** — `runAgentDemo`: the agentic loop that calls Claude and executes tool calls through vistal
 - **Lines 115–135** — `main`: three identical prompts run under three different contexts

@@ -1,7 +1,10 @@
 {
-  "name": "vista",
+  "name": "vistal",
   "private": true,
-  "workspaces": ["packages/*", "examples/*"],
+  "workspaces": [
+    "packages/*",
+    "examples/*"
+  ],
   "scripts": {
     "build": "npm run build -w packages/core && npm run build -w packages/prisma",
     "test": "vitest run",
