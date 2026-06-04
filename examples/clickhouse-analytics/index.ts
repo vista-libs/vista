@@ -28,10 +28,10 @@ const vistal = createVistal(ch, {
 // ── Policies ──────────────────────────────────────────────────────────────────
 
 vistal.policy("orders", (ctx) => ({
-  read:      { tenant_id: ctx.tenant!.id },
+  read: { tenant_id: ctx.tenant!.id },
   aggregate: { tenant_id: ctx.tenant!.id },
-  write:     { tenant_id: ctx.tenant!.id },
-  delete:    false,
+  write: { tenant_id: ctx.tenant!.id, user_id: ctx.user.id },
+  delete: false,
   fields: {
     deny: ctx.user.role === "analyst" ? ["user_id"] : [],
     // internal_notes is @vistal:sensitive — auto-stripped
@@ -39,17 +39,17 @@ vistal.policy("orders", (ctx) => ({
 }))
 
 vistal.policy("users", (ctx) => ({
-  read:   { tenant_id: ctx.tenant!.id },
-  write:  false,
+  read: { tenant_id: ctx.tenant!.id },
+  write: false,
   delete: false,
   // password_hash is @vistal:sensitive — auto-stripped
 }))
 
 vistal.policy("events", (ctx) => ({
-  read:      { tenant_id: ctx.tenant!.id },
+  read: { tenant_id: ctx.tenant!.id },
   aggregate: { tenant_id: ctx.tenant!.id },
-  write:     false,
-  delete:    false,
+  write: false,
+  delete: false,
 }))
 
 // ── Assertion helpers ─────────────────────────────────────────────────────────
