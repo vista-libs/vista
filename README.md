@@ -179,6 +179,25 @@ vistal.policy("order", (ctx) => ({
 
 `delete: false` suppresses the `delete_` tool. A required write field that is denied and not force-injected suppresses `create_` entirely, rather than generating a tool that always fails. Fields with `@default(...)` are not required in create tools.
 
+## Pagination
+
+`query_` tools return an envelope:
+
+```ts
+{ data: [...], nextCursor?: string, hasMore: boolean }
+```
+
+Pass `nextCursor` back as the `cursor` argument to fetch the next page — nothing else is required. Cursors are opaque base64 keyset tokens (sort field + direction + value + primary key), so they carry their own sort and paging stays stable under any sort even as rows are inserted. When `hasMore` is `false`, `nextCursor` is omitted.
+
+```ts
+const vistal = createVistal(prisma, {
+  maxLimit: 100,      // hard cap on `limit` (default 100)
+  defaultLimit: 50,   // applied when the model omits `limit` (default 50)
+})
+```
+
+Omitting `limit` applies `defaultLimit` rather than returning every row. A supplied `limit` is clamped to `maxLimit`. `cursor` takes precedence over `offset`. When no sort is given it defaults to the primary key; a `cursor` reuses the sort it was issued under (resending a *different* sort alongside a cursor is rejected). Cursor pagination requires a non-nullable sort field.
+
 ## Providers
 
 | Method | Use with |
