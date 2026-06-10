@@ -2,7 +2,7 @@
 
 **Connect your agent to your database. No SQL. No leaks.**
 
-[![npm](https://img.shields.io/npm/v/@vistal/core?label=%40vistal%2Fcore)](https://www.npmjs.com/package/@vistal/core) [![npm](https://img.shields.io/npm/v/@vistal/prisma?label=%40vistal%2Fprisma)](https://www.npmjs.com/package/@vistal/prisma) [![npm](https://img.shields.io/npm/v/@vistal/clickhouse?label=%40vistal%2Fclickhouse)](https://www.npmjs.com/package/@vistal/clickhouse) [![license](https://img.shields.io/npm/l/@vistal/core)](./LICENSE) [![TypeScript](https://img.shields.io/badge/types-TypeScript-blue)](./packages/core)
+[![npm](https://img.shields.io/npm/v/@vistal/core?label=%40vistal%2Fcore)](https://www.npmjs.com/package/@vistal/core) [![npm](https://img.shields.io/npm/v/@vistal/mcp?label=%40vistal%2Fmcp)](https://www.npmjs.com/package/@vistal/mcp) [![npm](https://img.shields.io/npm/v/@vistal/prisma?label=%40vistal%2Fprisma)](https://www.npmjs.com/package/@vistal/prisma) [![npm](https://img.shields.io/npm/v/@vistal/clickhouse?label=%40vistal%2Fclickhouse)](https://www.npmjs.com/package/@vistal/clickhouse) [![license](https://img.shields.io/npm/l/@vistal/core)](./LICENSE) [![TypeScript](https://img.shields.io/badge/types-TypeScript-blue)](./packages/core)
 
 Three lines wire your agent to your data. The model never writes SQL, never sees a field you hid, and never reads a row the current user isn't allowed to read. Enforcement lives in code, not in the prompt.
 
