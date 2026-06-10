@@ -37,3 +37,20 @@ export type {
 } from "./types"
 export type { ResolvedQuery, FilterNode, ResolvedInclude, PaginationClause } from "./ir/types"
 export { PolicyViolationError, ValidationError } from "./errors"
+
+// Live views — capture an agent query as a re-executable, subscribable handle.
+export type {
+  View,
+  ViewResult,
+  RowChanges,
+  SubscribeOptions,
+  ViewSubscription,
+  SerializedView,
+  ViewDefinition,
+} from "./view/types"
+export { buildResultSchema } from "./view/result-schema"
+export { compose } from "./view/compose"
+export type { ComposedView, ComposeSubscribeOptions } from "./view/compose"
+export { deriveView } from "./view/derive"
+export type { DeriveSpec, DerivedView } from "./view/derive"
+export { generateViewTypes } from "./view/codegen"

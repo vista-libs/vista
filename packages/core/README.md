@@ -26,7 +26,8 @@ npm install @vistal/core
 | `formats.anthropic / openai / gemini` | Tool formatters — convert provider-neutral tools to provider-specific shapes |
 | `PolicyViolationError`, `ValidationError` | Error types thrown by the policy engine |
 | `serializeResult` | Serializes `Decimal`, `Date`, `BigInt` in query results |
-| Types: `VistalAdapter`, `SchemaMap`, `ResolvedQuery`, `FilterNode`, `PolicyFn`, `PolicyResult`, … | All types needed to build a custom adapter |
+| `buildResultSchema` | JSON Schema for the result shape of a `ResolvedQuery` |
+| Types: `VistalAdapter`, `SchemaMap`, `ResolvedQuery`, `FilterNode`, `PolicyFn`, `PolicyResult`, `View`, `ViewResult`, … | All types needed to build a custom adapter |
 
 ---
 
@@ -78,6 +79,20 @@ const vistal = new Vistal({
   adapter: new MyAdapter(),
   defaultPolicy: "deny-all",
 })
+```
+
+Adapters may also implement an optional third method to power live views with native change notifications instead of polling:
+
+```ts
+class MyAdapter implements VistalAdapter {
+  // ...
+  subscribe(query: ResolvedQuery, onChange: () => void): () => void {
+    // watch the underlying table(s); call onChange() when data may have changed.
+    // The view then re-executes through the policy pipeline and diffs — the
+    // notification never carries data, so it can never bypass policy.
+    // Return an unsubscribe function.
+  }
+}
 ```
 
 ---
@@ -154,6 +169,36 @@ const tools = await vistal.tools.format(ctx, (t) => ({
   schema: t.parameters,
 }))
 ```
+
+---
+
+## Live views
+
+Capture any read tool call as a re-executable, subscribable handle — e.g. to drive a live chart from a query the agent built, without the LLM in the loop:
+
+```ts
+const view = await vistal.view<Order>("query_order", toolCall.args, ctx)
+
+view.resultSchema                       // JSON Schema of { data, hasMore, nextCursor? }
+const { data } = await view.execute()   // data: Order[] — policies re-evaluated per call
+
+const sub = view.subscribe(({ data }) => chart.update(data), {
+  intervalMs: 5000,   // poll interval (default 5000)
+  emitInitial: true,  // emit the first result immediately (default)
+  onError: (e) => log.warn(e),  // polling continues after errors
+})
+sub.stop()
+```
+
+Accepts per-resource (`query_x` / `get_x` / `aggregate_x`) and consolidated (`query` + `{ resource }`) calls; writes and meta tools throw `ValidationError` at creation, as do invalid args or a denied policy. Subscriptions poll + diff (emit only on change, never overlapping); when the adapter implements the optional `subscribe(query, onChange)` (see above), native change notifications replace the timer. Results are serialized like tool results, and `onQuery` events from views carry `source: "view"`. The TS generic is developer-asserted; `resultSchema` is the runtime source of truth, derived from the introspected schema and policy-allowed fields at view creation.
+
+**Scale & lifecycle.** Subscribers on the same View share one polling loop (late subscribers are served from cache); errors back off exponentially and reset on success; `jitter` (0–1) spreads polls across a fleet; `VistalConfig.maxConcurrentViewQueries` (default 16) caps simultaneous view executions per instance. `diffKey: "id"` adds row-level `changes` to each emission.
+
+**Persistence & governance.** `view.toJSON()` → `{ vistal: "view", v: 1, toolName, args }` — no ctx, by design; rehydrate with `vistal.viewFromJSON(json, ctx)` under a freshly resolved context. `vistal.registerView(name, { toolName, args })` / `openView(name, ctx)` / `listViews()` maintain a governed catalog of allowed live queries.
+
+**Composition.** `compose([viewA, viewB], (a, b) => ...)` runs a pure app-authored transform over multiple views and re-emits when the *output* changes. `deriveView(view, { groupBy, aggregations, sort?, limit? })` applies a declarative, schema-validated reshape — data-only, so the spec can safely come from an agent — and derives its own `resultSchema`.
+
+**Codegen.** `generateViewTypes(view.resultSchema, "Order")` emits `OrderRow` / `OrderResult` TypeScript interfaces from the runtime schema.
 
 ---
 

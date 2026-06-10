@@ -42,7 +42,7 @@
     "@modelcontextprotocol/sdk": "^1.29.0"
   },
   "peerDependencies": {
-    "@vistal/core": "^0.2.0",
+    "@vistal/core": "^0.3.0",
     "express": "^4.0.0 || ^5.0.0"
   },
   "peerDependenciesMeta": {

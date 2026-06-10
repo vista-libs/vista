@@ -8,16 +8,57 @@ import type {
 } from "@vistal/core"
 import { encodeCursor } from "@vistal/core"
 import { introspectPrisma } from "./introspection"
+import { PgNotifyListener, PgLiveOptions } from "./live"
+
+export interface PrismaAdapterOptions {
+  schemaPath?: string
+  /** Enable Postgres LISTEN/NOTIFY change notifications for live views.
+   *  Requires the optional `pg` package and `installLiveTriggers()` run once
+   *  against the database. Without it, views fall back to polling. */
+  live?: PgLiveOptions
+}
 
 export class PrismaAdapter implements VistalAdapter {
-  constructor(
-    private prisma: PrismaClient,
-    private schemaPath?: string,
-  ) {}
+  private prisma: PrismaClient
+  private schemaPath?: string
+  private schemaMap?: SchemaMap
+  private listener?: PgNotifyListener
+
+  /** Defined only when `live` is configured — its absence keeps views on polling. */
+  subscribe?: (query: ResolvedQuery, onChange: () => void) => () => void
+
+  constructor(prisma: PrismaClient, options?: string | PrismaAdapterOptions) {
+    this.prisma = prisma
+    const opts = typeof options === "string" ? { schemaPath: options } : (options ?? {})
+    this.schemaPath = opts.schemaPath
+    if (opts.live) {
+      this.listener = new PgNotifyListener(opts.live)
+      this.subscribe = (query, onChange) => this.listener!.watch(this.tablesFor(query), onChange)
+    }
+  }
 
   async introspect(): Promise<SchemaMap> {
     const path = this.schemaPath ?? "./prisma/schema.prisma"
-    return introspectPrisma(path)
+    const schema = await introspectPrisma(path)
+    this.schemaMap = schema
+    return schema
+  }
+
+  // Tables whose changes can affect a query's result: the queried resource
+  // plus every eager-loaded relation. Both the Prisma table name and the
+  // resource name are watched, covering @@map'd tables notified either way.
+  private tablesFor(query: ResolvedQuery): string[] {
+    const resources = [
+      query.resource,
+      ...Object.values(query.include ?? {}).map((inc) => inc.resource),
+    ]
+    const tables = new Set<string>()
+    for (const resource of resources) {
+      tables.add(resource)
+      const tableName = this.schemaMap?.resources[resource]?.tableName
+      if (tableName) tables.add(tableName)
+    }
+    return [...tables]
   }
 
   // Resolve the Prisma client delegate for a resource. Resource names come from
@@ -263,6 +304,9 @@ export function matchesFilter(obj: Record<string, unknown>, filter: FilterNode):
   }
 }
 
+// Results are flattened from Prisma's nested `_sum`/`_count` shape into the
+// flat `{ groupByField, alias: value }` rows the IR promises — the same shape
+// the ClickHouse adapter returns, and what view resultSchemas describe.
 async function executeAggregate(
   // eslint-disable-next-line @typescript-eslint/no-explicit-any
   model: any,
@@ -270,40 +314,39 @@ async function executeAggregate(
   where: Record<string, unknown> | undefined,
 ): Promise<unknown> {
   const aggs = query.aggregations ?? []
-  const groupBy = query.groupBy
+  const groupBy = query.groupBy ?? []
 
-  if (groupBy && groupBy.length > 0) {
-    // Prisma groupBy
-    const _agg: Record<string, unknown> = {}
-    for (const a of aggs) {
-      if (!_agg[`_${a.fn}`]) _agg[`_${a.fn}`] = {}
-      ;(_agg[`_${a.fn}`] as Record<string, boolean>)[a.field] = true
-    }
-    const args: Record<string, unknown> = { by: groupBy, ..._agg }
-    if (where) args.where = where
-    return model.groupBy(args)
-  }
-
-  // Prisma aggregate
-  const _agg: Record<string, unknown> = {}
+  // Prisma request: `count` on "*" becomes `_count: { _all: true }`.
+  const request: Record<string, Record<string, boolean>> = {}
   for (const a of aggs) {
-    if (a.fn === "count") {
-      _agg._count = _agg._count ? _agg._count : {}
-      if (a.field === "*") {
-        _agg._count = true
-      } else {
-        ;(_agg._count as Record<string, boolean>)[a.field] = true
-      }
-    } else {
-      if (!_agg[`_${a.fn}`]) _agg[`_${a.fn}`] = {}
-      ;(_agg[`_${a.fn}`] as Record<string, boolean>)[a.field] = true
-    }
+    const key = `_${a.fn}`
+    const field = a.fn === "count" && a.field === "*" ? "_all" : a.field
+    request[key] = { ...request[key], [field]: true }
   }
-  if (Object.keys(_agg).length === 0) _agg._count = true
+  if (aggs.length === 0) request._count = { _all: true }
 
-  const args: Record<string, unknown> = { ..._agg }
+  const flatten = (row: Record<string, unknown>): Record<string, unknown> => {
+    const out: Record<string, unknown> = {}
+    for (const g of groupBy) out[g] = row[g]
+    for (const a of aggs) {
+      const bucket = row[`_${a.fn}`] as Record<string, unknown> | undefined
+      out[a.alias] = bucket?.[a.fn === "count" && a.field === "*" ? "_all" : a.field] ?? null
+    }
+    if (aggs.length === 0) out.count = (row._count as Record<string, unknown> | undefined)?._all
+    return out
+  }
+
+  if (groupBy.length > 0) {
+    const args: Record<string, unknown> = { by: groupBy, ...request }
+    if (where) args.where = where
+    const rows = (await model.groupBy(args)) as Record<string, unknown>[]
+    return rows.map(flatten)
+  }
+
+  const args: Record<string, unknown> = { ...request }
   if (where) args.where = where
-  return model.aggregate(args)
+  const row = (await model.aggregate(args)) as Record<string, unknown>
+  return flatten(row)
 }
 
 export function translateFilter(node: FilterNode): Record<string, unknown> {

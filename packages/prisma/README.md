@@ -148,6 +148,33 @@ These are the strings you pass to `policy()` and that appear in generated tool n
 
 ---
 
+## Live views with LISTEN/NOTIFY
+
+Live views poll by default. On Postgres you can replace polling with native change notifications (requires the optional peer dependency `pg`):
+
+```ts
+import { createVistal, installLiveTriggers } from "@vistal/prisma"
+
+// Once per database — e.g. in a migration step. Table names are the actual
+// Postgres table names (the Prisma model name unless @@map is used).
+await installLiveTriggers(prisma, ["Order", "User"])
+
+const vistal = createVistal(prisma, {
+  live: {
+    connectionString: process.env.DATABASE_URL!,
+    channel: "vistal_changes",   // default
+    debounceMs: 250,             // coalesce notification bursts (default)
+    onError: (e) => logger.warn("live updates unavailable", e),
+  },
+})
+```
+
+How it works: statement-level triggers `pg_notify` the **table name only** on one channel; a single dedicated `pg` connection LISTENs and routes notifications to the views watching that table (including tables of eager-loaded relations). On a notification the view re-executes through the full policy pipeline — notifications never carry data, so they can never bypass policy. The LISTEN connection starts lazily with the first subscription and closes with the last. If the connection can't be established (e.g. `pg` missing), `onError` fires and affected views go stale — monitor it, or omit `live` to stay on polling.
+
+`liveTriggersSQL(tables, channel?)` returns the raw SQL if you prefer to manage triggers in your own migrations.
+
+---
+
 ## Exports
 
 | Export | Purpose |
@@ -155,6 +182,8 @@ These are the strings you pass to `policy()` and that appear in generated tool n
 | `createVistal(prisma, config?)` | Main entry point — creates a `Vistal` instance with the Prisma adapter wired up and resource types inferred |
 | `PrismaAdapter` | The adapter class if you need to instantiate it separately |
 | `translateFilter` | Converts a vistal `FilterNode` to a Prisma `where` object — useful when building a custom adapter on top of Prisma |
+| `installLiveTriggers` / `liveTriggersSQL` | Install (or emit) the LISTEN/NOTIFY triggers for live views |
+| `PgNotifyListener` | The LISTEN connection manager, if you need to wire it manually |
 
 ---
 

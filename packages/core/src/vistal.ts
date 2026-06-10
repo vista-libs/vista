@@ -1,6 +1,15 @@
 import { SchemaMap, PolicyFn, PolicyResult, DefaultContext } from "./types"
 import { ResolvedQuery } from "./ir/types"
-import { buildResolvedQuery } from "./ir/builder"
+import { buildResolvedQuery, parseToolName } from "./ir/builder"
+import { buildResultSchema } from "./view/result-schema"
+import { ViewEngine, Semaphore } from "./view/engine"
+import type {
+  View,
+  ViewResult,
+  SubscribeOptions,
+  SerializedView,
+  ViewDefinition,
+} from "./view/types"
 import {
   generateTools,
   generateConsolidatedTools,
@@ -28,6 +37,9 @@ export interface VistalConfig<TContext = DefaultContext, TResources extends stri
   maxLimit?: number
   /** Default `limit` applied when the model omits one. Default 50. */
   defaultLimit?: number
+  /** Cap on concurrent view executions (polling + native re-runs) across this
+   *  instance, so many live dashboards can't stampede the database. Default 16. */
+  maxConcurrentViewQueries?: number
 }
 
 /** Resolved pagination bounds threaded into the builder and tool generators. */
@@ -43,6 +55,8 @@ export interface QueryEvent<TContext, TResources extends string = string> {
   ctx: TContext
   durationMs: number
   error?: Error
+  /** "tool" for agent tool calls, "view" for View.execute()/subscribe() re-runs. */
+  source?: "tool" | "view"
 }
 
 export interface GetToolsOptions<TResources extends string = string> {
@@ -97,6 +111,14 @@ export interface ResourceDescriptor {
 export interface VistalAdapter {
   introspect(): Promise<SchemaMap>
   execute(query: ResolvedQuery): Promise<unknown>
+  /**
+   * Optional native change notifications for live views. Called with the
+   * policy-resolved query to watch; invoke `onChange` whenever the underlying
+   * data may have changed — the view then re-executes through the policy
+   * pipeline and diffs, so notifications never carry data past the policy.
+   * Returns an unsubscribe function. When absent, views fall back to polling.
+   */
+  subscribe?(query: ResolvedQuery, onChange: () => void): () => void
 }
 
 export class Vistal<TContext = DefaultContext, TResources extends string = string> {
@@ -108,6 +130,8 @@ export class Vistal<TContext = DefaultContext, TResources extends string = strin
   private resolvePolicyFn?: (resource: TResources, ctx: TContext) => PolicyResult
   private onQueryFn?: (event: QueryEvent<TContext, TResources>) => void
   private pagination: PaginationConfig
+  private viewDefs: Record<string, ViewDefinition> = {}
+  private viewLimiter: Semaphore
 
   constructor(config: VistalConfig<TContext, TResources>) {
     this.adapter = config.adapter
@@ -119,6 +143,7 @@ export class Vistal<TContext = DefaultContext, TResources extends string = strin
       maxLimit: config.maxLimit ?? DEFAULT_PAGINATION.maxLimit,
       defaultLimit: config.defaultLimit ?? DEFAULT_PAGINATION.defaultLimit,
     }
+    this.viewLimiter = new Semaphore(config.maxConcurrentViewQueries ?? 16)
   }
 
   /** Register an access policy for a resource. Use "*" as a wildcard fallback. */
@@ -264,6 +289,15 @@ export class Vistal<TContext = DefaultContext, TResources extends string = strin
   }
 
   async executeTool(toolName: string, input: unknown, ctx: TContext): Promise<unknown> {
+    return this.executeToolInternal(toolName, input, ctx, "tool")
+  }
+
+  private async executeToolInternal(
+    toolName: string,
+    input: unknown,
+    ctx: TContext,
+    source: "tool" | "view",
+  ): Promise<unknown> {
     const start = Date.now()
     let caughtError: Error | undefined
     let resolvedResource = toolName.includes("_")
@@ -287,21 +321,8 @@ export class Vistal<TContext = DefaultContext, TResources extends string = strin
       }
 
       if ((CONSOLIDATED_VERBS as readonly string[]).includes(toolName)) {
-        const resource = inp.resource as string | undefined
-        if (!resource) throw new ValidationError(`"${toolName}" requires a "resource" argument`)
+        const { internalName, normalizedInput, resource } = normalizeConsolidatedCall(toolName, inp)
         resolvedResource = resource
-        const internalName = `${toolName}_${resource}`
-        let normalizedInput: Record<string, unknown>
-        if (toolName === "create" || toolName === "update") {
-          const { resource: _r, data, ...rest } = inp
-          normalizedInput = {
-            ...rest,
-            ...(typeof data === "object" && data !== null ? (data as Record<string, unknown>) : {}),
-          }
-        } else {
-          const { resource: _r, ...rest } = inp
-          normalizedInput = rest
-        }
         const query = buildResolvedQuery(
           internalName,
           normalizedInput,
@@ -338,9 +359,151 @@ export class Vistal<TContext = DefaultContext, TResources extends string = strin
           ctx,
           durationMs: Date.now() - start,
           error: caughtError,
+          source,
         })
       }
     }
+  }
+
+  /**
+   * Capture an agent query (a read tool call) as a reusable, policy-enforced
+   * view the application can re-execute and subscribe to without the LLM in
+   * the loop — e.g. to drive a live chart from a query the agent built.
+   *
+   * Accepts per-resource tool names (`query_order`) and consolidated calls
+   * (`query` + `{ resource: "order", ... }`). Only read operations are
+   * allowed; writes and meta tools throw a ValidationError. Invalid args or a
+   * denied policy throw immediately at creation. Policies are re-evaluated on
+   * every execute()/poll, and results are serialized (Decimal/Date/BigInt) to
+   * JSON-safe values.
+   *
+   * ```ts
+   * const view = await vistal.view<Order>("query_order", call.args, ctx)
+   * view.resultSchema                 // JSON Schema of { data, hasMore, nextCursor? }
+   * const { data } = await view.execute()
+   * const sub = view.subscribe((r) => chart.update(r.data), { intervalMs: 5000 })
+   * sub.stop()
+   * ```
+   */
+  async view<T = Record<string, unknown>>(
+    toolName: string,
+    args: unknown,
+    ctx: TContext,
+  ): Promise<View<T>> {
+    const schema = await this.loadSchema()
+    const policies = this.buildEffectivePolicies(schema)
+
+    if (toolName === "list_resources" || toolName === "describe_resource") {
+      throw new ValidationError(`view() does not support the meta tool "${toolName}"`)
+    }
+
+    // Clone so caller mutations after creation don't change what re-executes.
+    const frozenArgs =
+      typeof args === "object" && args !== null && !Array.isArray(args)
+        ? { ...(args as Record<string, unknown>) }
+        : args
+
+    let internalName = toolName
+    let normalizedInput: unknown = frozenArgs
+    if ((CONSOLIDATED_VERBS as readonly string[]).includes(toolName)) {
+      const normalized = normalizeConsolidatedCall(
+        toolName,
+        (frozenArgs ?? {}) as Record<string, unknown>,
+      )
+      internalName = normalized.internalName
+      normalizedInput = normalized.normalizedInput
+    }
+
+    const { operation } = parseToolName(internalName)
+    if (operation !== "find" && operation !== "findOne" && operation !== "aggregate") {
+      throw new ValidationError(
+        `view() only supports read operations (query/get/aggregate); got "${toolName}"`,
+      )
+    }
+
+    // Built eagerly so bad args or a denied policy fail at creation, and to
+    // derive the result schema. execute() rebuilds it per call to stay current
+    // with policies that read mutable ctx.
+    const initialQuery = buildResolvedQuery(
+      internalName,
+      normalizedInput,
+      schema,
+      policies,
+      ctx,
+      this.defaultPolicy,
+      this.pagination,
+    )
+    const resultSchema = buildResultSchema(initialQuery, schema)
+
+    const execute = async (): Promise<ViewResult<T>> => {
+      const raw = serializeResult(await this.executeToolInternal(toolName, frozenArgs, ctx, "view"))
+      return normalizeEnvelope<T>(raw, operation)
+    }
+
+    // One engine per View: all subscribers share a single polling loop (or a
+    // single native subscription), created lazily on the first subscribe.
+    const adapter = this.adapter
+    let engine: ViewEngine<T> | undefined
+    return {
+      toolName,
+      args: frozenArgs,
+      resource: initialQuery.resource,
+      operation,
+      resultSchema,
+      execute,
+      subscribe: (onData: (result: ViewResult<T>) => void, options?: SubscribeOptions) => {
+        engine ??= new ViewEngine<T>(
+          execute,
+          adapter.subscribe ? (onChange) => adapter.subscribe!(initialQuery, onChange) : undefined,
+          this.viewLimiter,
+        )
+        return engine.subscribe(onData, options)
+      },
+      toJSON: (): SerializedView => ({ vistal: "view", v: 1, toolName, args: frozenArgs }),
+    }
+  }
+
+  /**
+   * Rehydrate a persisted view (`view.toJSON()`). The context is deliberately
+   * not part of the serialized form — resolve it fresh for the caller opening
+   * the view, exactly as you would for a tool call.
+   */
+  async viewFromJSON<T = Record<string, unknown>>(json: unknown, ctx: TContext): Promise<View<T>> {
+    const v = json as Partial<SerializedView> | null
+    if (!v || v.vistal !== "view" || v.v !== 1 || typeof v.toolName !== "string") {
+      throw new ValidationError(
+        'viewFromJSON() expects the shape produced by view.toJSON(): { vistal: "view", v: 1, toolName, args }',
+      )
+    }
+    return this.view<T>(v.toolName, v.args, ctx)
+  }
+
+  /**
+   * Register a named view definition — a governed catalog of queries that may
+   * be opened as live views. Useful to allow-list what dashboards can run and
+   * to share definitions across processes.
+   */
+  registerView(name: string, def: ViewDefinition): this {
+    this.viewDefs[name] = def
+    return this
+  }
+
+  /** Open a registered view under a context. Throws on unknown names. */
+  async openView<T = Record<string, unknown>>(name: string, ctx: TContext): Promise<View<T>> {
+    const def = this.viewDefs[name]
+    if (!def) {
+      const known = Object.keys(this.viewDefs)
+      throw new ValidationError(
+        `Unknown view "${name}". Registered views: ${known.length ? known.join(", ") : "(none)"}`,
+      )
+    }
+    const view = await this.view<T>(def.toolName, def.args, ctx)
+    return { ...view, name }
+  }
+
+  /** List registered view definitions. */
+  listViews(): Array<{ name: string } & ViewDefinition> {
+    return Object.entries(this.viewDefs).map(([name, def]) => ({ name, ...def }))
   }
 
   // Resolves the operations a context may perform on a resource, using the
@@ -533,6 +696,49 @@ export class Vistal<TContext = DefaultContext, TResources extends string = strin
 // recover from. Any other error (e.g. a raw DB driver error) may carry internal
 // details — file paths, query dumps — so it is replaced with a generic message.
 // The full error is still delivered to onQuery for server-side logging.
+// Turns a consolidated call ("query" + { resource, ... }) into the internal
+// per-resource form ("query_order" + flattened input). For create/update the
+// nested `data` object is merged into the input.
+function normalizeConsolidatedCall(
+  toolName: string,
+  inp: Record<string, unknown>,
+): { internalName: string; normalizedInput: Record<string, unknown>; resource: string } {
+  const resource = inp.resource as string | undefined
+  if (!resource) throw new ValidationError(`"${toolName}" requires a "resource" argument`)
+  let normalizedInput: Record<string, unknown>
+  if (toolName === "create" || toolName === "update") {
+    const { resource: _r, data, ...rest } = inp
+    normalizedInput = {
+      ...rest,
+      ...(typeof data === "object" && data !== null ? (data as Record<string, unknown>) : {}),
+    }
+  } else {
+    const { resource: _r, ...rest } = inp
+    normalizedInput = rest
+  }
+  return { internalName: `${toolName}_${resource}`, normalizedInput, resource }
+}
+
+// Adapters return different shapes per operation; views expose one envelope.
+function normalizeEnvelope<T>(raw: unknown, operation: string): ViewResult<T> {
+  if (operation === "findOne") {
+    return { data: raw == null ? [] : [raw as T], hasMore: false }
+  }
+  if (Array.isArray(raw)) {
+    return { data: raw as T[], hasMore: false }
+  }
+  if (raw !== null && typeof raw === "object" && Array.isArray((raw as { data?: unknown }).data)) {
+    const env = raw as { data: T[]; hasMore?: boolean; nextCursor?: string }
+    return {
+      data: env.data,
+      hasMore: env.hasMore ?? false,
+      ...(env.nextCursor !== undefined ? { nextCursor: env.nextCursor } : {}),
+    }
+  }
+  // Aggregate without groupBy may come back as a single object of aliases.
+  return { data: raw == null ? [] : [raw as T], hasMore: false }
+}
+
 function safeErrorMessage(err: unknown): string {
   if (err instanceof ValidationError || err instanceof PolicyViolationError) {
     return err.message

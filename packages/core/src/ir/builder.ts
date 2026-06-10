@@ -6,9 +6,9 @@ import { PolicyViolationError, ValidationError } from "../errors"
 import { decodeCursor, type CursorKeyset } from "./cursor"
 import type { PaginationConfig } from "../vistal"
 
-type OperationType = "find" | "findOne" | "create" | "update" | "delete" | "aggregate"
+export type OperationType = "find" | "findOne" | "create" | "update" | "delete" | "aggregate"
 
-function parseToolName(toolName: string): { operation: OperationType; resource: string } {
+export function parseToolName(toolName: string): { operation: OperationType; resource: string } {
   const prefixes: Array<[string, OperationType]> = [
     ["query_", "find"],
     ["get_", "findOne"],

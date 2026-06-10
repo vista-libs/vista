@@ -679,7 +679,7 @@ export function generateConsolidatedTools<TContext>(
   return tools
 }
 
-function buildFieldSchema(field: FieldSchema): Record<string, unknown> {
+export function buildFieldSchema(field: FieldSchema): Record<string, unknown> {
   const base: Record<string, unknown> = {}
   if (field.description) base.description = field.description
 
